@@ -1,20 +1,19 @@
 """
 client/voice_client.py
 
-Microphone → Smart VAD → WebSocket stream → live transcript → LLM response.
-Run directly:  python -m client.voice_client
+Microphone → Smart VAD → WebSocket → Whisper STT → LLM → TTS speaker.
+Run:  python -m client.voice_client
 
 Display:
-  ...  you are talking (Whisper partial)
-  YOU: what you said (Whisper final)
-  AI : token by token response as LLM generates (then newline when done)
+  grey  ... partial transcript while you speak
+  blue  YOU: final transcript
+  green AI : response text (streamed) + spoken aloud simultaneously
 
-Commands (type while running):
-  clear   → reset conversation history
-  quit    → exit
+Commands:
+  clear  → reset conversation memory
+  quit   → exit
 """
 
-import os
 import sys
 import json
 import queue
@@ -26,16 +25,17 @@ import resampy
 import websocket
 
 from config import RECORD_SAMPLE_RATE, WHISPER_SAMPLE_RATE
+from client.tts_player import create_tts_player
 
 SERVER_WS = "ws://localhost:5001/ws/transcribe"
 SERVER_HTTP = "http://localhost:5001/health"
 
 # ── Smart VAD config ──────────────────────────────────────────────────────────
-ENERGY_THRESHOLD = 0.015  # raised — filters more background noise
-ZCR_WEIGHT = 0.4  # more zero-crossing weight to distinguish speech from noise
+ENERGY_THRESHOLD = 0.015
+ZCR_WEIGHT = 0.4
 SPEECH_PAD_MS = 150
-PAUSE_SECONDS = 1.5  # slightly longer pause before we cut — avoids mid-sentence cuts
-MIN_SPEECH_SEC = 0.4  # ignore very short blips
+PAUSE_SECONDS = 1.5
+MIN_SPEECH_SEC = 0.4
 CHUNK_MS = 30
 
 
@@ -43,8 +43,9 @@ CHUNK_MS = 30
 
 
 class SmartVAD:
-    def __init__(self, on_chunk, on_speech_end):
+    def __init__(self, on_chunk, on_speech_start, on_speech_end):
         self.on_chunk = on_chunk
+        self.on_speech_start = on_speech_start
         self.on_speech_end = on_speech_end
 
         self._pause_samples = int(WHISPER_SAMPLE_RATE * PAUSE_SECONDS)
@@ -72,6 +73,7 @@ class SmartVAD:
             if not self._in_speech:
                 self._in_speech = True
                 self._silence_count = 0
+                self.on_speech_start()  # ← new: fires when speech begins
                 pad = (
                     np.concatenate(self._preroll)
                     if self._preroll
@@ -129,12 +131,10 @@ class SmartVAD:
         )
 
 
-# ── Terminal display helper ───────────────────────────────────────────────────
+# ── Terminal display ──────────────────────────────────────────────────────────
 
 
 class Display:
-    """Thread-safe terminal output with colour."""
-
     _lock = threading.Lock()
     _mid_line = False
 
@@ -188,7 +188,7 @@ class Display:
             cls._mid_line = False
 
 
-# ── WebSocket client ──────────────────────────────────────────────────────────
+# ── WebSocket + TTS client ────────────────────────────────────────────────────
 
 
 class StreamingVoiceClient:
@@ -199,6 +199,9 @@ class StreamingVoiceClient:
         self._connected = threading.Event()
         self._send_q: queue.Queue[bytes | str] = queue.Queue()
         self._running = False
+
+        # TTS — created once, lives for the whole session
+        self._tts = create_tts_player()
 
     def connect(self) -> bool:
         self._ws = websocket.WebSocketApp(
@@ -218,11 +221,13 @@ class StreamingVoiceClient:
 
     def disconnect(self):
         self._running = False
+        self._tts.shutdown()
         if self._ws:
             self._ws.close()
 
     def send_audio(self, chunk_16k: np.ndarray):
-        if self._connected.is_set():
+        # Drop audio while TTS is speaking — prevents AI hearing its own voice
+        if self._connected.is_set() and not self._tts.is_speaking():
             self._send_q.put(chunk_16k.astype(np.float32).tobytes())
 
     def send_end_of_speech(self):
@@ -233,7 +238,15 @@ class StreamingVoiceClient:
         if self._connected.is_set():
             self._send_q.put(json.dumps({"type": "clear_history"}))
 
-    # ── Callbacks ─────────────────────────────────────────────────────────
+    def on_user_speech_start(self):
+        """Called the moment VAD detects the user started speaking — interrupt TTS."""
+        self._tts.interrupt()
+
+    def on_user_speech_end(self):
+        """Called when VAD detects user stopped — re-enable TTS."""
+        self._tts.resume()
+
+    # ── WebSocket callbacks ───────────────────────────────────────────────
 
     def _on_open(self, ws):
         Display.info("WebSocket connected")
@@ -254,15 +267,26 @@ class StreamingVoiceClient:
         if t == "partial":
             if text.strip():
                 Display.partial(text)
+
         elif t == "final":
             if text.strip():
                 Display.you(text)
+
         elif t == "llm_start":
+            self._tts.resume()  # re-enable after user spoke
             Display.ai_start()
+            # Note: VAD will ignore audio while is_speaking() is True
+
         elif t == "llm_token":
+            # Show text AND feed to TTS simultaneously
             Display.ai_token(text)
+            self._tts.feed_token(text)
+
         elif t == "llm_done":
+            # Speak any trailing fragment that didn't end with punctuation
+            self._tts.flush()
             Display.ai_done()
+
         elif t == "error":
             Display.error(msg.get("message", "unknown error"))
 
@@ -295,6 +319,7 @@ class StreamingVoiceClient:
 def run_session(client: StreamingVoiceClient) -> None:
     vad = SmartVAD(
         on_chunk=client.send_audio,
+        on_speech_start=client.on_user_speech_start,  # interrupt TTS when you speak
         on_speech_end=client.send_end_of_speech,
     )
 
@@ -371,7 +396,7 @@ def check_server() -> None:
 
 def main() -> None:
     print("\n" + "=" * 54)
-    print("    REAL-TIME VOICE AI  (STT + LLM)")
+    print("    REAL-TIME VOICE AI  (STT + LLM + TTS)")
     print("=" * 54)
     check_server()
 
