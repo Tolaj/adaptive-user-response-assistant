@@ -1,131 +1,393 @@
 """
 client/voice_client.py
-Microphone → VAD → server → printed transcript.
+
+Microphone → Smart VAD → WebSocket stream → live transcript → LLM response.
 Run directly:  python -m client.voice_client
+
+Display:
+  ...  you are talking (Whisper partial)
+  YOU: what you said (Whisper final)
+  AI : token by token response as LLM generates (then newline when done)
+
+Commands (type while running):
+  clear   → reset conversation history
+  quit    → exit
 """
 
 import os
 import sys
-import time
-import tempfile
-import threading
+import json
 import queue
+import threading
 
 import numpy as np
 import sounddevice as sd
-import requests
 import resampy
+import websocket
 
 from config import RECORD_SAMPLE_RATE, WHISPER_SAMPLE_RATE
-from audio.audio_utils import numpy_to_wav
-from client.vad import VADProcessor
 
-SERVER = "http://localhost:5001"
+SERVER_WS = "ws://localhost:5001/ws/transcribe"
+SERVER_HTTP = "http://localhost:5001/health"
+
+# ── Smart VAD config ──────────────────────────────────────────────────────────
+ENERGY_THRESHOLD = 0.015  # raised — filters more background noise
+ZCR_WEIGHT = 0.4  # more zero-crossing weight to distinguish speech from noise
+SPEECH_PAD_MS = 150
+PAUSE_SECONDS = 1.5  # slightly longer pause before we cut — avoids mid-sentence cuts
+MIN_SPEECH_SEC = 0.4  # ignore very short blips
+CHUNK_MS = 30
 
 
-# ── Networking ────────────────────────────────────────────────────────────────
+# ── Smart VAD ─────────────────────────────────────────────────────────────────
 
-def transcribe_chunk(audio: np.ndarray) -> str:
-    """Resample, write WAV, POST to /transcribe, return text."""
-    audio_16k = resampy.resample(audio, RECORD_SAMPLE_RATE, WHISPER_SAMPLE_RATE)
-    tmp = os.path.join(tempfile.gettempdir(), f"chunk_{int(time.time() * 1000)}.wav")
-    numpy_to_wav(audio_16k, tmp, WHISPER_SAMPLE_RATE)
-    try:
-        with open(tmp, "rb") as f:
-            r = requests.post(
-                f"{SERVER}/transcribe",
-                files={"file": ("audio.wav", f, "audio/wav")},
-                timeout=30,
-            )
-        if r.status_code == 200:
-            return r.json().get("text", "").strip()
-        return f"[server error {r.status_code}]"
-    except Exception as e:
-        return f"[network error: {e}]"
-    finally:
+
+class SmartVAD:
+    def __init__(self, on_chunk, on_speech_end):
+        self.on_chunk = on_chunk
+        self.on_speech_end = on_speech_end
+
+        self._pause_samples = int(WHISPER_SAMPLE_RATE * PAUSE_SECONDS)
+        self._min_samples = int(WHISPER_SAMPLE_RATE * MIN_SPEECH_SEC)
+        self._pad_samples = int(RECORD_SAMPLE_RATE * SPEECH_PAD_MS / 1000)
+
+        self._preroll: list[np.ndarray] = []
+        self._preroll_len = 0
+        self._in_speech = False
+        self._silence_count = 0
+        self._speech_samples = 0
+
+    def process(self, chunk: np.ndarray) -> None:
+        flat = chunk.flatten()
+
+        self._preroll.append(flat)
+        self._preroll_len += len(flat)
+        while self._preroll_len > self._pad_samples and self._preroll:
+            removed = self._preroll.pop(0)
+            self._preroll_len -= len(removed)
+
+        is_speech = self._is_speech(flat)
+
+        if is_speech:
+            if not self._in_speech:
+                self._in_speech = True
+                self._silence_count = 0
+                pad = (
+                    np.concatenate(self._preroll)
+                    if self._preroll
+                    else np.array([], dtype=np.float32)
+                )
+                pad_16k = self._resample(pad)
+                if len(pad_16k) > 0:
+                    self.on_chunk(pad_16k)
+                    self._speech_samples += len(pad_16k)
+
+            chunk_16k = self._resample(flat)
+            self.on_chunk(chunk_16k)
+            self._speech_samples += len(chunk_16k)
+            self._silence_count = 0
+
+        elif self._in_speech:
+            chunk_16k = self._resample(flat)
+            self.on_chunk(chunk_16k)
+            self._silence_count += len(chunk_16k)
+            self._speech_samples += len(chunk_16k)
+
+            if self._silence_count >= self._pause_samples:
+                if self._speech_samples >= self._min_samples:
+                    self.on_speech_end()
+                self._in_speech = False
+                self._silence_count = 0
+                self._speech_samples = 0
+
+    def flush(self):
+        if self._in_speech and self._speech_samples >= self._min_samples:
+            self.on_speech_end()
+        self._in_speech = False
+        self._silence_count = 0
+        self._speech_samples = 0
+
+    def _is_speech(self, chunk: np.ndarray) -> bool:
+        if len(chunk) == 0:
+            return False
+        energy = float(np.sqrt(np.mean(chunk**2)))
+        zcr = (
+            float(np.mean(np.abs(np.diff(np.sign(chunk)))) / 2)
+            if len(chunk) > 1
+            else 0.0
+        )
+        return (energy + ZCR_WEIGHT * zcr) > ENERGY_THRESHOLD
+
+    @staticmethod
+    def _resample(audio: np.ndarray) -> np.ndarray:
+        if len(audio) == 0:
+            return audio.astype(np.float32)
+        if RECORD_SAMPLE_RATE == WHISPER_SAMPLE_RATE:
+            return audio.astype(np.float32)
+        return resampy.resample(audio, RECORD_SAMPLE_RATE, WHISPER_SAMPLE_RATE).astype(
+            np.float32
+        )
+
+
+# ── Terminal display helper ───────────────────────────────────────────────────
+
+
+class Display:
+    """Thread-safe terminal output with colour."""
+
+    _lock = threading.Lock()
+    _mid_line = False
+
+    @classmethod
+    def partial(cls, text: str):
+        with cls._lock:
+            print(f"\r  \033[90m... {text:<76}\033[0m", end="", flush=True)
+            cls._mid_line = True
+
+    @classmethod
+    def you(cls, text: str):
+        with cls._lock:
+            if cls._mid_line:
+                print()
+            print(f"  \033[94mYOU:\033[0m {text}", flush=True)
+            cls._mid_line = False
+
+    @classmethod
+    def ai_start(cls):
+        with cls._lock:
+            if cls._mid_line:
+                print()
+            print(f"  \033[92mAI :\033[0m ", end="", flush=True)
+            cls._mid_line = True
+
+    @classmethod
+    def ai_token(cls, token: str):
+        with cls._lock:
+            print(token, end="", flush=True)
+
+    @classmethod
+    def ai_done(cls):
+        with cls._lock:
+            print(flush=True)
+            cls._mid_line = False
+
+    @classmethod
+    def info(cls, text: str):
+        with cls._lock:
+            if cls._mid_line:
+                print()
+            print(f"  \033[90m{text}\033[0m", flush=True)
+            cls._mid_line = False
+
+    @classmethod
+    def error(cls, text: str):
+        with cls._lock:
+            if cls._mid_line:
+                print()
+            print(f"  \033[91m[error] {text}\033[0m", flush=True)
+            cls._mid_line = False
+
+
+# ── WebSocket client ──────────────────────────────────────────────────────────
+
+
+class StreamingVoiceClient:
+    def __init__(self):
+        self._ws: websocket.WebSocketApp | None = None
+        self._ws_thread: threading.Thread | None = None
+        self._sender_thread: threading.Thread | None = None
+        self._connected = threading.Event()
+        self._send_q: queue.Queue[bytes | str] = queue.Queue()
+        self._running = False
+
+    def connect(self) -> bool:
+        self._ws = websocket.WebSocketApp(
+            SERVER_WS,
+            on_open=self._on_open,
+            on_message=self._on_message,
+            on_error=self._on_error,
+            on_close=self._on_close,
+        )
+        self._ws_thread = threading.Thread(
+            target=self._ws.run_forever,
+            kwargs={"ping_interval": 20, "ping_timeout": 10},
+            daemon=True,
+        )
+        self._ws_thread.start()
+        return self._connected.wait(timeout=10)
+
+    def disconnect(self):
+        self._running = False
+        if self._ws:
+            self._ws.close()
+
+    def send_audio(self, chunk_16k: np.ndarray):
+        if self._connected.is_set():
+            self._send_q.put(chunk_16k.astype(np.float32).tobytes())
+
+    def send_end_of_speech(self):
+        if self._connected.is_set():
+            self._send_q.put(json.dumps({"type": "end_of_speech"}))
+
+    def send_clear_history(self):
+        if self._connected.is_set():
+            self._send_q.put(json.dumps({"type": "clear_history"}))
+
+    # ── Callbacks ─────────────────────────────────────────────────────────
+
+    def _on_open(self, ws):
+        Display.info("WebSocket connected")
+        self._connected.set()
+        self._running = True
+        self._sender_thread = threading.Thread(target=self._sender_loop, daemon=True)
+        self._sender_thread.start()
+
+    def _on_message(self, ws, message):
         try:
-            os.unlink(tmp)
-        except OSError:
-            pass
+            msg = json.loads(message)
+        except Exception:
+            return
+
+        t = msg.get("type")
+        text = msg.get("text", "")
+
+        if t == "partial":
+            if text.strip():
+                Display.partial(text)
+        elif t == "final":
+            if text.strip():
+                Display.you(text)
+        elif t == "llm_start":
+            Display.ai_start()
+        elif t == "llm_token":
+            Display.ai_token(text)
+        elif t == "llm_done":
+            Display.ai_done()
+        elif t == "error":
+            Display.error(msg.get("message", "unknown error"))
+
+    def _on_error(self, ws, error):
+        Display.error(f"WS error: {error}")
+
+    def _on_close(self, ws, code, msg):
+        self._connected.clear()
+        Display.info(f"WebSocket disconnected (code={code})")
+
+    def _sender_loop(self):
+        while self._running or not self._send_q.empty():
+            try:
+                item = self._send_q.get(timeout=0.1)
+            except queue.Empty:
+                continue
+            try:
+                if isinstance(item, bytes):
+                    self._ws.send(item, opcode=websocket.ABNF.OPCODE_BINARY)
+                else:
+                    self._ws.send(item)
+            except Exception as e:
+                Display.error(f"Send failed: {e}")
+                break
 
 
 # ── Recording session ─────────────────────────────────────────────────────────
 
-def run_session() -> None:
-    """
-    Open the microphone, run VAD, send speech chunks to the server,
-    and print transcriptions until the user presses ENTER.
-    """
-    audio_queue: queue.Queue[np.ndarray] = queue.Queue()
-    running = [True]
 
-    # Worker thread: drains the queue and calls the server
-    def worker():
-        while running[0] or not audio_queue.empty():
-            try:
-                chunk = audio_queue.get(timeout=0.3)
-            except queue.Empty:
-                continue
-            text = transcribe_chunk(chunk)
-            if text:
-                print(f"  >>> {text}", flush=True)
-
-    worker_thread = threading.Thread(target=worker, daemon=True)
-    worker_thread.start()
-
-    # VAD: puts complete utterances onto the queue
-    vad = VADProcessor(on_speech_end=audio_queue.put)
+def run_session(client: StreamingVoiceClient) -> None:
+    vad = SmartVAD(
+        on_chunk=client.send_audio,
+        on_speech_end=client.send_end_of_speech,
+    )
 
     def audio_callback(indata, frames, time_info, status):
-        vad.process_chunk(indata.copy())
+        vad.process(indata.copy())
 
     stream = sd.InputStream(
         samplerate=RECORD_SAMPLE_RATE,
         channels=1,
         dtype="float32",
         callback=audio_callback,
-        blocksize=512,
+        blocksize=int(RECORD_SAMPLE_RATE * CHUNK_MS / 1000),
     )
 
     stream.start()
-    print("🔴 Listening... speak naturally\n   Press ENTER to stop\n", flush=True)
+    Display.info("🔴  Listening... speak naturally. Press ENTER to stop.")
     input()
     stream.stop()
     stream.close()
-
-    # Flush any trailing speech
     vad.flush()
 
-    running[0] = False
-    worker_thread.join(timeout=15)
+
+# ── Command loop ──────────────────────────────────────────────────────────────
+
+
+def command_loop(client: StreamingVoiceClient) -> None:
+    print()
+    print(
+        "  Commands:  ENTER = start listening  |  'clear' = reset memory  |  'quit' = exit"
+    )
+    print()
+
+    while True:
+        try:
+            cmd = input("  [ ENTER to listen, or command ] ").strip().lower()
+        except (EOFError, KeyboardInterrupt):
+            break
+
+        if cmd in ("quit", "q"):
+            break
+        elif cmd == "clear":
+            client.send_clear_history()
+            Display.info("Conversation history cleared.")
+        elif cmd == "":
+            print()
+            run_session(client)
+            print()
+        else:
+            Display.info(f"Unknown: '{cmd}'  (clear / quit / ENTER)")
+
+    client.disconnect()
+    print("\n  Bye!")
+
+
+# ── Health check ──────────────────────────────────────────────────────────────
+
+
+def check_server() -> None:
+    import requests as req
+
+    try:
+        r = req.get(SERVER_HTTP, timeout=5)
+        d = r.json()
+        print(
+            f"  Server OK  |  Whisper: {d['whisper_model']}  |  LLM loaded: {d.get('llm_loaded', '?')}"
+        )
+    except Exception as e:
+        print(f"  Cannot reach server at {SERVER_HTTP}: {e}")
+        sys.exit(1)
 
 
 # ── Entry point ───────────────────────────────────────────────────────────────
 
-def check_server() -> None:
-    try:
-        r = requests.get(f"{SERVER}/health", timeout=3)
-        d = r.json()
-        print(f"Server OK | Whisper: {d['whisper_model']}")
-    except Exception as e:
-        print(f"Cannot reach server: {e}")
-        sys.exit(1)
-
 
 def main() -> None:
-    print("\n" + "=" * 50)
-    print("  REAL-TIME VOICE TRANSCRIPTION")
-    print("=" * 50)
+    print("\n" + "=" * 54)
+    print("    REAL-TIME VOICE AI  (STT + LLM)")
+    print("=" * 54)
     check_server()
-    print("\nCtrl+C to quit\n")
-    try:
-        while True:
-            input("[ Press ENTER to start listening ]")
-            print()
-            run_session()
-            print()
-    except KeyboardInterrupt:
-        print("\nBye!")
+
+    client = StreamingVoiceClient()
+    print("  Connecting WebSocket ...", end="", flush=True)
+    if not client.connect():
+        print(" FAILED — is the server running?")
+        sys.exit(1)
+    print(" OK\n")
+
+    print("  Legend:")
+    print(
+        "  \033[90m... partial\033[0m  |  \033[94mYOU: transcript\033[0m  |  \033[92mAI : response\033[0m"
+    )
+
+    command_loop(client)
 
 
 if __name__ == "__main__":

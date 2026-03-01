@@ -13,16 +13,29 @@ Quick Start Guide:
 
 import os
 from pathlib import Path
+import torch
 
 # ═══════════════════════════════════════════════════════════════
 # QUICK SETTINGS - CHANGE THESE!
 # ═══════════════════════════════════════════════════════════════
 
 # Which Whisper model to use (change this to match your downloaded file)
-WHISPER_MODEL_NAME = "base"  # Options: "tiny", "base", "small", "medium", "large-v2", "large-v3"
+WHISPER_MODEL_NAME = (
+    "base"  # Options: "tiny", "base", "small", "medium", "large-v2", "large-v3"
+)
+
+# Auto-detect best available device
+if torch.cuda.is_available():
+    WHISPER_DEVICE = "cuda"
+elif torch.backends.mps.is_available():
+    WHISPER_DEVICE = "mps"
+else:
+    WHISPER_DEVICE = "cpu"
 
 # Which LLM model to load on startup
-ACTIVE_LLM_MODEL = "qwen2.5-3b"  # Options: "qwen2.5-3b", "qwen2.5-7b", "qwen2.5-coder-7b"
+ACTIVE_LLM_MODEL = (
+    "qwen2.5-3b"  # Options: "qwen2.5-3b", "qwen2.5-7b", "qwen2.5-coder-7b"
+)
 
 # GPU layers (lower = more RAM left for Whisper)
 GPU_LAYERS = 20  # Range: 0-35. Try 15-20 if out of memory, 25-30 if you have plenty
@@ -35,7 +48,7 @@ SERVER_PORT = 5001
 # ═══════════════════════════════════════════════════════════════
 
 BASE_DIR = Path(__file__).parent
-MODELS_DIR = BASE_DIR / "models"
+MODELS_DIR = BASE_DIR / "../../models"
 WHISPER_DIR = MODELS_DIR / "whisper"
 
 
@@ -62,11 +75,11 @@ WHISPER_MODEL_INFO = {
 
 # Available LLM models
 AVAILABLE_LLM_MODELS = {
-    "qwen2.5-3b": "Qwen2.5-3B-Instruct",         # Smallest, fastest
-    "qwen2.5-7b": "Qwen2.5-7B-Instruct",         # Better quality
-    "qwen2.5-coder-7b": "qwen2.5-coder-7b",      # Best for code
-    "qwen2.5-vl-3b": "Qwen2.5-VL-3B-Instruct",   # Vision + text (small)
-    "qwen2.5-vl-7b": "qwen2.5-vl-7b",            # Vision + text (better)
+    "qwen2.5-3b": "Qwen2.5-3B-Instruct",  # Smallest, fastest
+    "qwen2.5-7b": "Qwen2.5-7B-Instruct",  # Better quality
+    "qwen2.5-coder-7b": "qwen2.5-coder-7b",  # Best for code
+    "qwen2.5-vl-3b": "Qwen2.5-VL-3B-Instruct",  # Vision + text (small)
+    "qwen2.5-vl-7b": "qwen2.5-vl-7b",  # Vision + text (better)
 }
 
 # Context window size (how much text the model remembers)
@@ -81,7 +94,7 @@ CPU_THREADS = max(1, os.cpu_count() // 2)
 # ═══════════════════════════════════════════════════════════════
 
 DEFAULT_TTS_LANGUAGE = "en"  # Default language code
-DEFAULT_TTS_SPEED = 1.0      # 1.0 = normal, 0.8 = slower, 1.2 = faster
+DEFAULT_TTS_SPEED = 1.0  # 1.0 = normal, 0.8 = slower, 1.2 = faster
 
 # Supported TTS languages
 TTS_LANGUAGES = {
@@ -105,7 +118,9 @@ TTS_LANGUAGES = {
 # ═══════════════════════════════════════════════════════════════
 
 # System prompt for voice assistant
-VOICE_ASSISTANT_PROMPT = "You are a helpful voice assistant. Keep responses concise and conversational."
+VOICE_ASSISTANT_PROMPT = (
+    "You are a helpful voice assistant. Keep responses concise and conversational."
+)
 
 # Max tokens for voice responses (shorter = faster)
 VOICE_MAX_TOKENS = 512
@@ -119,10 +134,10 @@ VOICE_TEMPERATURE = 0.7
 # ═══════════════════════════════════════════════════════════════
 
 # LLM performance settings
-LLM_FLASH_ATTN = True        # Enable flash attention (faster)
-LLM_F16_KV = True            # Use FP16 for key/value cache
-LLM_OFFLOAD_KQV = True       # Offload KQV to GPU
-LLM_BATCH_SIZE = 1024        # Batch size for processing
+LLM_FLASH_ATTN = True  # Enable flash attention (faster)
+LLM_F16_KV = True  # Use FP16 for key/value cache
+LLM_OFFLOAD_KQV = True  # Offload KQV to GPU
+LLM_BATCH_SIZE = 1024  # Batch size for processing
 
 # Allow environment variable overrides
 GPU_LAYERS = int(os.getenv("GPU_LAYERS", GPU_LAYERS))
@@ -156,26 +171,31 @@ WHISPER_MODEL_NAME = os.getenv("WHISPER_MODEL", WHISPER_MODEL_NAME)
 # VALIDATION
 # ═══════════════════════════════════════════════════════════════
 
+
 def validate_config():
     """Validate configuration and show warnings"""
     errors = []
     warnings = []
-    
+
     # Check if Whisper model exists
     if not WHISPER_MODEL_PATH.exists():
         errors.append(f"Whisper model not found: {WHISPER_MODEL_PATH}")
-        warnings.append(f"Download from: https://openaipublic.azureedge.net/main/whisper/models/")
-    
+        warnings.append(
+            f"Download from: https://openaipublic.azureedge.net/main/whisper/models/"
+        )
+
     # Check if LLM model directory exists
     llm_dir = MODELS_DIR / ACTIVE_LLM_MODEL
     if not llm_dir.exists():
         errors.append(f"LLM model directory not found: {llm_dir}")
-    
+
     # Memory warnings
     if WHISPER_MODEL_NAME in ["large-v2", "large-v3"] and GPU_LAYERS > 25:
-        warnings.append("Using large Whisper + high GPU layers may cause out-of-memory errors")
+        warnings.append(
+            "Using large Whisper + high GPU layers may cause out-of-memory errors"
+        )
         warnings.append("Try reducing GPU_LAYERS to 15-20")
-    
+
     return errors, warnings
 
 
@@ -183,21 +203,24 @@ def validate_config():
 # DISPLAY CONFIG (for debugging)
 # ═══════════════════════════════════════════════════════════════
 
+
 def print_config():
     """Print current configuration"""
-    print("\n" + "="*60)
+    print("\n" + "=" * 60)
     print("CONFIGURATION")
-    print("="*60)
+    print("=" * 60)
     print(f"📁 Models directory: {MODELS_DIR}")
-    print(f"🎤 Whisper model: {WHISPER_MODEL_NAME} ({WHISPER_MODEL_PATH.name if WHISPER_MODEL_PATH.exists() else 'NOT FOUND'})")
+    print(
+        f"🎤 Whisper model: {WHISPER_MODEL_NAME} ({WHISPER_MODEL_PATH.name if WHISPER_MODEL_PATH.exists() else 'NOT FOUND'})"
+    )
     print(f"🤖 LLM model: {ACTIVE_LLM_MODEL}")
     print(f"🎮 GPU layers: {GPU_LAYERS}")
     print(f"💾 Context size: {CONTEXT_SIZE}")
     print(f"🧵 CPU threads: {CPU_THREADS}")
     print(f"🔊 TTS language: {DEFAULT_TTS_LANGUAGE}")
     print(f"🌐 Server port: {SERVER_PORT}")
-    print("="*60)
-    
+    print("=" * 60)
+
     # Show warnings
     errors, warnings = validate_config()
     if errors:

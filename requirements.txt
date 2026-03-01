@@ -1,0 +1,20 @@
+# Voice Server dependencies
+flask
+flask-cors
+torch
+openai-whisper
+gTTS
+# llama-cpp-python
+Pillow
+requests
+numpy
+resampy
+soundfile
+
+# Voice Client dependencies
+sounddevice
+pygame
+flask-sock 
+websocket-client
+pyttsx3 
+sounddevice
