@@ -18,15 +18,23 @@ from typing import Callable, Optional
 import numpy as np
 import whisper
 
-from config import WHISPER_DEVICE
+
+from config import (
+    WHISPER_DEVICE,
+    MIN_AUDIO_SEC,
+    NO_SPEECH_THRESHOLD,
+    LOGPROB_THRESHOLD,
+    TRANSCRIBE_EVERY,
+)
+
 from transcription.whisper_loader import get_model
 
 # ── Tuning constants ──────────────────────────────────────────────────────────
 MAX_BUFFER_SEC = 29.0  # Whisper hard limit
-TRANSCRIBE_EVERY = 0.6  # seconds between partial passes
-MIN_AUDIO_SEC = 0.4  # skip transcription for very short clips
+# TRANSCRIBE_EVERY = 0.6  # seconds between partial passes
+# MIN_AUDIO_SEC = 0.4  # skip transcription for very short clips
 
-NO_SPEECH_THRESHOLD = 0.6  # discard if Whisper says >60% chance no speech
+# NO_SPEECH_THRESHOLD = 0.6  # discard if Whisper says >60% chance no speech
 COMPRESSION_RATIO_THRESHOLD = 2.0  # discard if text is suspiciously repetitive
 REPETITION_MIN_WORDS = 4  # phrase length to check for repetition
 REPETITION_COUNT_THRESHOLD = 3  # how many times a phrase must repeat to be flagged
@@ -154,12 +162,25 @@ class StreamingTranscriber:
                 self._last_text = text
                 self.on_partial(text)
 
+    # def _get_audio(self) -> Optional[np.ndarray]:
+    #     with self._lock:
+    #         if not self._buf:
+    #             return None
+    #         audio = np.concatenate(self._buf).astype(np.float32)
+    #     if len(audio) / self.sample_rate < MIN_AUDIO_SEC:
+    #         return None
+    #     return audio
+
     def _get_audio(self) -> Optional[np.ndarray]:
         with self._lock:
             if not self._buf:
                 return None
             audio = np.concatenate(self._buf).astype(np.float32)
         if len(audio) / self.sample_rate < MIN_AUDIO_SEC:
+            return None
+        # RMS gate — reject audio that's too quiet to be real speech
+        rms = float(np.sqrt(np.mean(audio**2)))
+        if rms < 0.01:
             return None
         return audio
 
@@ -176,7 +197,7 @@ class StreamingTranscriber:
                     condition_on_previous_text=False,  # prevents looping context
                     no_speech_threshold=NO_SPEECH_THRESHOLD,
                     compression_ratio_threshold=COMPRESSION_RATIO_THRESHOLD,
-                    logprob_threshold=-1.0,
+                    logprob_threshold=LOGPROB_THRESHOLD,
                 )
 
             # ── Hallucination checks ──────────────────────────────────────

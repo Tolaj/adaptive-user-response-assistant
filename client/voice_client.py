@@ -30,6 +30,9 @@ from config import (
     ENABLE_TTS,
     RECORD_SAMPLE_RATE,
     WHISPER_SAMPLE_RATE,
+    ENERGY_THRESHOLD,
+    MIN_SPEECH_SEC,
+    PAUSE_SECONDS,
 )
 
 # Only import tts_player when we actually need client-side TTS.
@@ -40,11 +43,11 @@ SERVER_WS = "ws://localhost:5001/ws/transcribe"
 SERVER_HTTP = "http://localhost:5001/health"
 
 # ── Smart VAD config ──────────────────────────────────────────────────────────
-ENERGY_THRESHOLD = 0.015
+# ENERGY_THRESHOLD = 0.015
 ZCR_WEIGHT = 0.4
 SPEECH_PAD_MS = 150
-PAUSE_SECONDS = 1.5
-MIN_SPEECH_SEC = 0.4
+# PAUSE_SECONDS = 1.5
+# MIN_SPEECH_SEC = 0.4
 CHUNK_MS = 30
 
 

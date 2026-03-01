@@ -1,0 +1,26 @@
+╔══════════════════════════════════════════════════════╗
+  Session started: 2026-03-01 15:44:00
+╚══════════════════════════════════════════════════════╝
+
+[15:44:00] EVENT: Client connected
+
+[15:44:23] Request #01
+  YOU : Zedcoin
+  AI  : Zedcoin is a cryptocurrency that uses a unique privacy-focused algorithm.
+  TIMERS → whisper:0.292s  first_token:2.420s  llm_total:3.710s  end_to_end:4.002s  chars:73
+
+[15:44:44] Request #02
+  YOU : Okay, tell me about different types of cryptocurrency.
+  AI  : Cryptocurrencies can be broadly categorized into public, private, and hybrid. Public ones like Bitcoin and Ethereum are open-source and can be used by anyone. Private coins are typically closed-source and restricted to a specific group of users. Hybrid coins combine elements of both.
+  TIMERS → whisper:0.367s  first_token:2.511s  llm_total:8.299s  end_to_end:8.665s  chars:284
+
+[15:45:10] Request #03
+  YOU : Okay, not bad.
+  AI  : Glad you found it helpful! If you have more questions, feel free to ask.
+  TIMERS → whisper:0.342s  first_token:1.799s  llm_total:3.433s  end_to_end:3.776s  chars:72
+
+[15:45:27] Request #04
+  YOU : All right, thank you.
+  AI  : You're welcome! Feel free to ask if you need more information.
+  TIMERS → whisper:0.445s  first_token:2.018s  llm_total:3.737s  end_to_end:4.182s  chars:62
+
