@@ -1,0 +1,26 @@
+╔══════════════════════════════════════════════════════╗
+  Session started: 2026-03-01 04:35:06
+╚══════════════════════════════════════════════════════╝
+
+[04:35:06] EVENT: Client connected
+
+[04:35:23] Request #01
+  YOU : Hi, how are you doing?
+  AI  : Hi! I'm just a program, so I don't feel things. How about you?
+  TIMERS → whisper:0.531s  first_token:2.890s  llm_total:3.740s  end_to_end:4.271s  chars:62
+
+[04:35:33] Request #02
+  YOU : I'm just.
+  AI  : That's okay, it's nice to connect. How can I help you today?
+  TIMERS → whisper:0.225s  first_token:1.764s  llm_total:2.862s  end_to_end:3.087s  chars:60
+
+[04:35:42] Request #03
+  YOU : That's okay.
+  AI  : No problem! If you need anything, just let me know.
+  TIMERS → whisper:0.270s  first_token:1.729s  llm_total:2.579s  end_to_end:2.850s  chars:51
+
+[04:35:48] EVENT: Client disconnected
+
+╔══════════════════════════════════════════════════════╗
+  Session ended: 2026-03-01 04:35:48  (duration: 43s, 3 requests)
+╚══════════════════════════════════════════════════════╝

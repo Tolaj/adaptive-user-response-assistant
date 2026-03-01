@@ -1,0 +1,11 @@
+╔══════════════════════════════════════════════════════╗
+  Session started: 2026-03-01 05:10:53
+╚══════════════════════════════════════════════════════╝
+
+[05:10:53] EVENT: Client connected
+
+[05:11:17] Request #01
+  YOU : Hey, how is it going?
+  AI  : Hey! Just chatting, how about you?
+  TIMERS → whisper:0.387s  first_token:2.407s  llm_total:3.745s  end_to_end:4.132s  chars:34
+

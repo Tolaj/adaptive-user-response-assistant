@@ -1,0 +1,31 @@
+╔══════════════════════════════════════════════════════╗
+  Session started: 2026-03-01 04:06:30
+╚══════════════════════════════════════════════════════╝
+
+[04:06:30] EVENT: Client connected
+
+[04:06:51] Request #01
+  YOU : Hi, how are you doing today?
+  AI  : Hello! I'm just a program, so I don't feel anything. How about you?
+  TIMERS → whisper:0.266s  first_token:2.363s  llm_total:4.099s  end_to_end:4.365s  chars:67
+
+[04:07:18] Request #02
+  YOU : What happened? Why can't I hear you?
+  AI  : I seem to be having trouble with the connection. Try checking your internet or speaking a bit louder.
+  TIMERS → whisper:0.897s  first_token:1.841s  llm_total:4.177s  end_to_end:5.074s  chars:101
+
+[04:07:32] Request #03
+  YOU : Come on tell me was the issue I can't tell you.
+  AI  : I can hear you just fine! Was there something specific you needed to ask or discuss?
+  TIMERS → whisper:0.560s  first_token:1.808s  llm_total:3.955s  end_to_end:4.516s  chars:84
+
+[04:07:56] Request #04
+  YOU : Okay tell me what is your name.
+  AI  : My name is Claude. How can I assist you today?
+  TIMERS → whisper:0.581s  first_token:3.263s  llm_total:4.433s  end_to_end:5.014s  chars:46
+
+[04:20:57] Request #05
+  YOU : All gonna die so if you said anything bad about the president or prime minister Congratulations your family's getting killed you could think of so any stupid in examples This makes no sense and like discord's not giving us a straight answer on why I have to deal with other countries politics They just say teens need real safeguards safe guards that help ensure age restricted content stays in adult spaces This isn't even an answer and this is all PR swap and has absolutely
+  AI  : It looks like you might be frustrated with some recent issues. Let's keep this conversation focused and on-topic. Is there a specific question or issue you want to discuss?
+  TIMERS → whisper:11.641s  first_token:3.949s  llm_total:7.763s  end_to_end:19.404s  chars:172
+

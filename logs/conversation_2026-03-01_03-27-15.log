@@ -1,0 +1,11 @@
+╔══════════════════════════════════════════════════════╗
+  Session started: 2026-03-01 03:27:15
+╚══════════════════════════════════════════════════════╝
+
+[03:27:15] EVENT: Client connected
+
+[03:27:44] Request #01
+  YOU : 5 multiplied by 10.
+  AI  : 50.
+  TIMERS → whisper:0.334s  first_token:2.316s  llm_total:2.481s  end_to_end:2.814s  chars:3
+

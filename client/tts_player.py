@@ -24,18 +24,39 @@ from typing import Optional
 
 # ── Sentence splitter (shared) ────────────────────────────────────────────────
 _SENTENCE_END = re.compile(r"(?<![A-Z][a-z])(?<!\d)([.?!])\s+|([.?!])$")
-MIN_CHUNK_CHARS = 12
+_COMMA_PAUSE = re.compile(r",\s+")  # speak on comma too — natural rhythm
+MIN_CHUNK_CHARS = 6  # lowered: speak sooner
+WORD_TRIGGER = 5  # speak after N words even without punctuation
 
 
 def _split_sentence(buf: str) -> tuple[str, str]:
     """
     Returns (sentence_to_speak, remaining_buffer).
-    If no sentence boundary found, returns ("", buf).
+    Fires on:
+      1. Sentence-ending punctuation (.?!)
+      2. Comma pause (natural mid-sentence breath)
+      3. Word count trigger — speaks after WORD_TRIGGER words even without punctuation
+         so the first chunk of speech starts as early as possible.
     """
+    # 1. Sentence end
     match = _SENTENCE_END.search(buf)
     if match:
         end = match.end()
         return buf[:end].strip(), buf[end:]
+
+    # 2. Comma pause
+    match = _COMMA_PAUSE.search(buf)
+    if match and match.start() >= MIN_CHUNK_CHARS:
+        end = match.end()
+        return buf[: match.start()].strip(), buf[end:]
+
+    # 3. Word-count trigger — dont wait for punctuation
+    words = buf.split()
+    if len(words) >= WORD_TRIGGER:
+        # Cut at the last word boundary so we dont chop a word in half
+        cut = buf.rstrip()
+        return cut, ""
+
     return "", buf
 
 
@@ -65,6 +86,10 @@ class BaseTTSPlayer(ABC):
         sentence, self._token_buf = _split_sentence(self._token_buf)
         if sentence and len(sentence) >= MIN_CHUNK_CHARS:
             self._enqueue(sentence)
+            # Immediately try again — there may be a second sentence already in buffer
+            sentence2, self._token_buf = _split_sentence(self._token_buf)
+            if sentence2 and len(sentence2) >= MIN_CHUNK_CHARS:
+                self._enqueue(sentence2)
 
     def flush(self) -> None:
         text = self._token_buf.strip()
@@ -176,6 +201,11 @@ class NativeTTSPlayer(BaseTTSPlayer):
         except Exception as e:
             self._voice_name = "Samantha"
             print(f"[TTS:native] Using default voice Samantha ({e})")
+        # Pre-warm: run a silent say call so the first real call has no startup lag
+        try:
+            subprocess.run(["say", "-v", self._voice_name, ""], capture_output=True)
+        except Exception:
+            pass
 
     def _speak(self, text: str) -> None:
         import subprocess

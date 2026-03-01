@@ -1,0 +1,21 @@
+╔══════════════════════════════════════════════════════╗
+  Session started: 2026-03-01 03:32:29
+╚══════════════════════════════════════════════════════╝
+
+[03:32:29] EVENT: Client connected
+
+[03:32:50] Request #01
+  YOU : What are you doing right now?
+  AI  : As a text-based assistant, I'm not actually doing anything right now. I'm here to help you!
+  TIMERS → whisper:0.598s  first_token:3.056s  llm_total:5.820s  end_to_end:6.418s  chars:91
+
+[03:33:20] Request #02
+  YOU : I'll see you later.
+  AI  : Sure thing! Talk to you later!
+  TIMERS → whisper:0.261s  first_token:3.437s  llm_total:4.362s  end_to_end:4.623s  chars:30
+
+[03:33:36] EVENT: Client disconnected
+
+╔══════════════════════════════════════════════════════╗
+  Session ended: 2026-03-01 03:33:36  (duration: 67s, 2 requests)
+╚══════════════════════════════════════════════════════╝

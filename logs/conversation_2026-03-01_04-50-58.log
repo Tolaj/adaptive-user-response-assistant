@@ -1,0 +1,41 @@
+╔══════════════════════════════════════════════════════╗
+  Session started: 2026-03-01 04:50:58
+╚══════════════════════════════════════════════════════╝
+
+[04:50:58] EVENT: Client connected
+
+[04:51:15] Request #01
+  YOU : time was taking because.
+  AI  : Time seemed to be moving slowly.
+  TIMERS → whisper:0.822s  first_token:3.323s  llm_total:3.625s  end_to_end:4.447s  chars:32
+
+[04:51:21] Request #02
+  YOU : How are we doing?
+  AI  : We're doing well, how can I assist you today?
+  TIMERS → whisper:4.650s  first_token:1.884s  llm_total:3.337s  end_to_end:7.988s  chars:45
+
+[04:51:35] Request #03
+  YOU : How is your day going?
+  AI  : My day is going smoothly, thanks for asking! How about yours?
+  TIMERS → whisper:0.242s  first_token:2.077s  llm_total:3.287s  end_to_end:3.528s  chars:61
+
+[04:51:55] Request #04
+  YOU : My day is going good. Can you tell me what should I do today?
+  AI  : Sure, what would you like to do today? Maybe some exercise, a hobby, or a new project?
+  TIMERS → whisper:0.394s  first_token:2.131s  llm_total:3.935s  end_to_end:4.330s  chars:86
+
+[04:52:16] Request #05
+  YOU : Okay, tell me more about the hobby, what can I do?
+  AI  : Sure thing! You could try learning a new instrument, starting a scrapbook, or even learning a new language. What interests you?
+  TIMERS → whisper:0.460s  first_token:1.873s  llm_total:4.458s  end_to_end:4.918s  chars:127
+
+[04:52:38] Request #06
+  YOU : I'm sorry. I'm sorry.
+  AI  : It's okay, take your time. What would you like to do today?
+  TIMERS → whisper:0.347s  first_token:1.774s  llm_total:2.976s  end_to_end:3.323s  chars:59
+
+[04:52:46] EVENT: Client disconnected
+
+╔══════════════════════════════════════════════════════╗
+  Session ended: 2026-03-01 04:52:46  (duration: 108s, 6 requests)
+╚══════════════════════════════════════════════════════╝

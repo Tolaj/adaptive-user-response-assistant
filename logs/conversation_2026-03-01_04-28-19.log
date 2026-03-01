@@ -1,0 +1,21 @@
+╔══════════════════════════════════════════════════════╗
+  Session started: 2026-03-01 04:28:19
+╚══════════════════════════════════════════════════════╝
+
+[04:28:19] EVENT: Client connected
+
+[04:28:38] Request #01
+  YOU : Hi, how is it going?
+  AI  : Hey! Just chatting, how about you?
+  TIMERS → whisper:0.301s  first_token:2.361s  llm_total:2.994s  end_to_end:3.295s  chars:34
+
+[04:28:49] Request #02
+  YOU : Just chatting.
+  AI  : Cool, what topics do you like to discuss?
+  TIMERS → whisper:1.071s  first_token:1.868s  llm_total:2.721s  end_to_end:3.792s  chars:41
+
+[04:29:06] EVENT: Client disconnected
+
+╔══════════════════════════════════════════════════════╗
+  Session ended: 2026-03-01 04:29:06  (duration: 47s, 2 requests)
+╚══════════════════════════════════════════════════════╝

@@ -24,8 +24,17 @@ import sounddevice as sd
 import resampy
 import websocket
 
-from config import RECORD_SAMPLE_RATE, WHISPER_SAMPLE_RATE
-from client.tts_player import create_tts_player
+from config import (
+    TTS_MODE,
+    ENABLE_STT,
+    ENABLE_TTS,
+    RECORD_SAMPLE_RATE,
+    WHISPER_SAMPLE_RATE,
+)
+
+# Only import tts_player when we actually need client-side TTS.
+if ENABLE_TTS and TTS_MODE == "client":
+    from client.tts_player import create_tts_player
 
 SERVER_WS = "ws://localhost:5001/ws/transcribe"
 SERVER_HTTP = "http://localhost:5001/health"
@@ -37,6 +46,31 @@ SPEECH_PAD_MS = 150
 PAUSE_SECONDS = 1.5
 MIN_SPEECH_SEC = 0.4
 CHUNK_MS = 30
+
+
+# ── Null TTS stub (used when TTS is disabled or in server-TTS mode) ───────────
+
+
+class _NullTTS:
+    """Drop-in replacement that does nothing — keeps the rest of the code clean."""
+
+    def is_speaking(self) -> bool:
+        return False
+
+    def interrupt(self) -> None:
+        pass
+
+    def resume(self) -> None:
+        pass
+
+    def feed_token(self, token: str) -> None:
+        pass
+
+    def flush(self) -> None:
+        pass
+
+    def shutdown(self) -> None:
+        pass
 
 
 # ── Smart VAD ─────────────────────────────────────────────────────────────────
@@ -73,7 +107,7 @@ class SmartVAD:
             if not self._in_speech:
                 self._in_speech = True
                 self._silence_count = 0
-                self.on_speech_start()  # ← new: fires when speech begins
+                self.on_speech_start()
                 pad = (
                     np.concatenate(self._preroll)
                     if self._preroll
@@ -200,8 +234,20 @@ class StreamingVoiceClient:
         self._send_q: queue.Queue[bytes | str] = queue.Queue()
         self._running = False
 
-        # TTS — created once, lives for the whole session
-        self._tts = create_tts_player()
+        # FIX: tracks whether the *server* is currently speaking (server-TTS
+        # mode).  Was referenced in _on_message but never initialised — would
+        # crash with AttributeError on the first tts_start message.
+        self._server_tts_active = threading.Event()
+
+        # FIX: only create a real TTS player when client-side TTS is wanted.
+        # In server-TTS mode (or when TTS is disabled entirely) we use a no-op
+        # stub so the rest of the code can call the same API without branching.
+        if ENABLE_TTS and TTS_MODE == "client":
+            self._tts = create_tts_player()
+        else:
+            self._tts = _NullTTS()
+
+    # ── Public API ────────────────────────────────────────────────────────
 
     def connect(self) -> bool:
         self._ws = websocket.WebSocketApp(
@@ -226,8 +272,17 @@ class StreamingVoiceClient:
             self._ws.close()
 
     def send_audio(self, chunk_16k: np.ndarray):
-        # Drop audio while TTS is speaking — prevents AI hearing its own voice
-        if self._connected.is_set() and not self._tts.is_speaking():
+        if not self._connected.is_set():
+            return
+        # FIX: gate on the correct "is something speaking" source.
+        # In server-TTS mode the server signals via tts_start/tts_done.
+        # In client-TTS mode (or TTS disabled) check the local player.
+        tts_speaking = (
+            self._server_tts_active.is_set()
+            if (ENABLE_TTS and TTS_MODE == "server")
+            else self._tts.is_speaking()
+        )
+        if not tts_speaking:
             self._send_q.put(chunk_16k.astype(np.float32).tobytes())
 
     def send_end_of_speech(self):
@@ -239,12 +294,18 @@ class StreamingVoiceClient:
             self._send_q.put(json.dumps({"type": "clear_history"}))
 
     def on_user_speech_start(self):
-        """Called the moment VAD detects the user started speaking — interrupt TTS."""
-        self._tts.interrupt()
+        """VAD detected speech start — interrupt whatever is currently playing."""
+        # FIX: in server-TTS mode we can't kill the server's subprocess from
+        # here; the server handles its own interruption when it receives audio.
+        # For client-TTS mode, interrupt the local player as before.
+        if ENABLE_TTS and TTS_MODE == "client":
+            self._tts.interrupt()
 
     def on_user_speech_end(self):
-        """Called when VAD detects user stopped — re-enable TTS."""
-        self._tts.resume()
+        """VAD detected speech end — re-enable client TTS if applicable."""
+        # FIX: only meaningful for client-TTS mode.
+        if ENABLE_TTS and TTS_MODE == "client":
+            self._tts.resume()
 
     # ── WebSocket callbacks ───────────────────────────────────────────────
 
@@ -256,6 +317,10 @@ class StreamingVoiceClient:
         self._sender_thread.start()
 
     def _on_message(self, ws, message):
+        if isinstance(message, bytes):
+            # Binary frames from the server are not expected in this protocol.
+            return
+
         try:
             msg = json.loads(message)
         except Exception:
@@ -272,19 +337,31 @@ class StreamingVoiceClient:
             if text.strip():
                 Display.you(text)
 
+        elif t == "tts_start":
+            # Server started speaking — mute mic to prevent echo.
+            # FIX: _server_tts_active is now properly initialised above.
+            self._server_tts_active.set()
+
+        elif t == "tts_done":
+            # Server finished speaking — unmute mic.
+            self._server_tts_active.clear()
+
         elif t == "llm_start":
-            self._tts.resume()  # re-enable after user spoke
+            # FIX: only resume client TTS when in client-TTS mode.
+            if ENABLE_TTS and TTS_MODE == "client":
+                self._tts.resume()
             Display.ai_start()
-            # Note: VAD will ignore audio while is_speaking() is True
 
         elif t == "llm_token":
-            # Show text AND feed to TTS simultaneously
             Display.ai_token(text)
-            self._tts.feed_token(text)
+            # FIX: only feed tokens to the local player in client-TTS mode.
+            if ENABLE_TTS and TTS_MODE == "client":
+                self._tts.feed_token(text)
 
         elif t == "llm_done":
-            # Speak any trailing fragment that didn't end with punctuation
-            self._tts.flush()
+            # FIX: only flush local player in client-TTS mode.
+            if ENABLE_TTS and TTS_MODE == "client":
+                self._tts.flush()
             Display.ai_done()
 
         elif t == "error":
@@ -295,6 +372,7 @@ class StreamingVoiceClient:
 
     def _on_close(self, ws, code, msg):
         self._connected.clear()
+        self._server_tts_active.clear()
         Display.info(f"WebSocket disconnected (code={code})")
 
     def _sender_loop(self):
@@ -317,9 +395,13 @@ class StreamingVoiceClient:
 
 
 def run_session(client: StreamingVoiceClient) -> None:
+    if not ENABLE_STT:
+        Display.info("STT is disabled (ENABLE_STT=False). Voice input unavailable.")
+        return
+
     vad = SmartVAD(
         on_chunk=client.send_audio,
-        on_speech_start=client.on_user_speech_start,  # interrupt TTS when you speak
+        on_speech_start=client.on_user_speech_start,
         on_speech_end=client.send_end_of_speech,
     )
 
@@ -347,14 +429,21 @@ def run_session(client: StreamingVoiceClient) -> None:
 
 def command_loop(client: StreamingVoiceClient) -> None:
     print()
-    print(
-        "  Commands:  ENTER = start listening  |  'clear' = reset memory  |  'quit' = exit"
-    )
+    if ENABLE_STT:
+        print(
+            "  Commands:  ENTER = start listening  |  'clear' = reset memory  |  'quit' = exit"
+        )
+    else:
+        print("  Commands:  'clear' = reset memory  |  'quit' = exit")
+        print("  (Voice input disabled — ENABLE_STT=False)")
     print()
 
     while True:
         try:
-            cmd = input("  [ ENTER to listen, or command ] ").strip().lower()
+            prompt = (
+                "  [ ENTER to listen, or command ] " if ENABLE_STT else "  [ command ] "
+            )
+            cmd = input(prompt).strip().lower()
         except (EOFError, KeyboardInterrupt):
             break
 
@@ -363,10 +452,12 @@ def command_loop(client: StreamingVoiceClient) -> None:
         elif cmd == "clear":
             client.send_clear_history()
             Display.info("Conversation history cleared.")
-        elif cmd == "":
+        elif cmd == "" and ENABLE_STT:
             print()
             run_session(client)
             print()
+        elif cmd == "" and not ENABLE_STT:
+            pass  # ignore bare Enter when STT is off
         else:
             Display.info(f"Unknown: '{cmd}'  (clear / quit / ENTER)")
 
@@ -396,7 +487,9 @@ def check_server() -> None:
 
 def main() -> None:
     print("\n" + "=" * 54)
-    print("    REAL-TIME VOICE AI  (STT + LLM + TTS)")
+    stt_label = "STT" if ENABLE_STT else "STT:off"
+    tts_label = "TTS" if ENABLE_TTS else "TTS:off"
+    print(f"    REAL-TIME VOICE AI  ({stt_label} + LLM + {tts_label})")
     print("=" * 54)
     check_server()
 

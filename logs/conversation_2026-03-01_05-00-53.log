@@ -1,0 +1,16 @@
+╔══════════════════════════════════════════════════════╗
+  Session started: 2026-03-01 05:00:53
+╚══════════════════════════════════════════════════════╝
+
+[05:00:53] EVENT: Client connected
+
+[05:01:14] Request #01
+  YOU : Hey, how is it going?
+  AI  : Hey! Just chatting, how about you?
+  TIMERS → whisper:1.096s  first_token:3.181s  llm_total:3.605s  end_to_end:4.701s  chars:34
+
+[05:01:31] Request #02
+  YOU : I'm doing good. Can you tell me something about cars?
+  AI  : Sure! Modern cars often come with advanced safety features and eco-friendly options.
+  TIMERS → whisper:0.431s  first_token:3.744s  llm_total:4.736s  end_to_end:5.167s  chars:84
+

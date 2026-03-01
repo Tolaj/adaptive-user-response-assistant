@@ -1,0 +1,31 @@
+╔══════════════════════════════════════════════════════╗
+  Session started: 2026-03-01 05:29:42
+╚══════════════════════════════════════════════════════╝
+
+[05:29:42] EVENT: Client connected
+
+[05:30:27] Request #01
+  YOU : Yeah, we're doing
+  AI  : Great! What are you working on?
+  TIMERS → whisper:0.554s  first_token:2.467s  llm_total:3.541s  end_to_end:4.095s  chars:31
+
+[05:30:44] Request #02
+  YOU : What is your name?
+  AI  : I'm a voice assistant here to help. How can I assist you today?
+  TIMERS → whisper:1.469s  first_token:2.766s  llm_total:4.936s  end_to_end:6.405s  chars:63
+
+[05:31:05] Request #03
+  YOU : Tell me a joke.
+  AI  : Why don't skeletons fight each other? They don't have hearts!
+  TIMERS → whisper:0.310s  first_token:1.658s  llm_total:2.735s  end_to_end:3.045s  chars:61
+
+[05:31:22] Request #04
+  YOU : Tell me another joke.
+  AI  : Sure, here's one: Why was the math book sad? Because it had too many problems.
+  TIMERS → whisper:0.553s  first_token:1.623s  llm_total:4.352s  end_to_end:4.905s  chars:78
+
+[05:31:46] Request #05
+  YOU : That was a good one.
+  AI  : Glad you liked it! There are plenty more to come.
+  TIMERS → whisper:2.559s  first_token:2.311s  llm_total:4.024s  end_to_end:6.583s  chars:49
+

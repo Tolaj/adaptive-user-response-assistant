@@ -1,0 +1,11 @@
+╔══════════════════════════════════════════════════════╗
+  Session started: 2026-03-01 05:14:59
+╚══════════════════════════════════════════════════════╝
+
+[05:14:59] EVENT: Client connected
+
+[05:15:31] Request #01
+  YOU : Can you hear me?
+  AI  : I can hear you clearly! How can I assist you today?
+  TIMERS → whisper:0.894s  first_token:2.069s  llm_total:2.837s  end_to_end:3.731s  chars:51
+

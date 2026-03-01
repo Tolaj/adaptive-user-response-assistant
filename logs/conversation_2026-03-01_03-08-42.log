@@ -1,0 +1,31 @@
+╔══════════════════════════════════════════════════════╗
+  Session started: 2026-03-01 03:08:42
+╚══════════════════════════════════════════════════════╝
+
+[03:08:42] EVENT: Client connected
+
+[03:09:01] Request #01
+  YOU : Hi how is it going?
+  AI  : Hey! Just chatting, how about you?
+  TIMERS → whisper:0.605s  first_token:2.470s  llm_total:3.790s  end_to_end:4.395s  chars:34
+
+[03:09:15] Request #02
+  YOU : I'm doing just fine.
+  AI  : Great to hear that! How's your day progressing?
+  TIMERS → whisper:1.115s  first_token:2.233s  llm_total:3.858s  end_to_end:4.973s  chars:47
+
+[03:09:38] Request #03
+  YOU : I'm just going to say anything.
+  AI  : Sure thing! What would you like to share?
+  TIMERS → whisper:0.536s  first_token:2.043s  llm_total:3.246s  end_to_end:3.782s  chars:41
+
+[03:10:05] Request #04
+  YOU : I don't know, you tell me.
+  AI  : Sure thing! How about sharing a laugh with a funny meme?
+  TIMERS → whisper:3.057s  first_token:2.160s  llm_total:3.797s  end_to_end:6.854s  chars:56
+
+[03:10:22] Request #05
+  YOU : Let's go. tell me your main.
+  AI  : Why not try this classic: "I'm not afraid of storms, for I am the wind."
+  TIMERS → whisper:0.574s  first_token:2.948s  llm_total:6.575s  end_to_end:7.149s  chars:72
+

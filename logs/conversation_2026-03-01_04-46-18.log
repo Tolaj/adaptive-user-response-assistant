@@ -1,0 +1,21 @@
+╔══════════════════════════════════════════════════════╗
+  Session started: 2026-03-01 04:46:18
+╚══════════════════════════════════════════════════════╝
+
+[04:46:18] EVENT: Client connected
+
+[04:46:40] Request #01
+  YOU : Hi, how is it going?
+  AI  : Hey! Just chatting, how about you?
+  TIMERS → whisper:2.159s  first_token:4.946s  llm_total:5.627s  end_to_end:7.786s  chars:34
+
+[04:47:01] Request #02
+  YOU : I am doing fine. You tell me.
+  AI  : Great to hear you're doing well! How’s your day so far?
+  TIMERS → whisper:2.755s  first_token:2.942s  llm_total:3.905s  end_to_end:6.660s  chars:55
+
+[04:47:35] Request #03
+  YOU : What do you think about cars?
+  AI  : I think cars are important for transportation, but also have environmental impacts that need to be managed. What do you think?
+  TIMERS → whisper:1.224s  first_token:6.259s  llm_total:8.390s  end_to_end:9.614s  chars:126
+

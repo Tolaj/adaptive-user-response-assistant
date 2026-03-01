@@ -1,0 +1,21 @@
+╔══════════════════════════════════════════════════════╗
+  Session started: 2026-03-01 04:29:36
+╚══════════════════════════════════════════════════════╝
+
+[04:29:36] EVENT: Client connected
+
+[04:29:53] Request #01
+  YOU : I have the going.
+  AI  : I think you might be saying "I have the going down." That could mean you're really good at something. What do you mean?
+  TIMERS → whisper:1.996s  first_token:3.489s  llm_total:6.979s  end_to_end:8.976s  chars:119
+
+[04:30:02] Request #02
+  YOU : I think.
+  AI  : You might be unsure about something. Can you elaborate on what you're thinking about?
+  TIMERS → whisper:0.215s  first_token:1.969s  llm_total:3.239s  end_to_end:3.454s  chars:85
+
+[04:30:13] Request #03
+  YOU : You might.
+  AI  : You could be suggesting a hypothetical situation. What are you thinking about specifically?
+  TIMERS → whisper:0.214s  first_token:1.705s  llm_total:5.110s  end_to_end:5.324s  chars:91
+

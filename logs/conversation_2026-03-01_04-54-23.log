@@ -1,0 +1,51 @@
+╔══════════════════════════════════════════════════════╗
+  Session started: 2026-03-01 04:54:23
+╚══════════════════════════════════════════════════════╝
+
+[04:54:23] EVENT: Client connected
+
+[04:54:36] Request #01
+  YOU : I just want to talk.
+  AI  : Sure thing! Talk away.
+  TIMERS → whisper:1.473s  first_token:1.919s  llm_total:2.162s  end_to_end:3.635s  chars:22
+
+[04:54:49] Request #02
+  YOU : What can we talk about but?
+  AI  : You could share your thoughts, ask for advice, or just chat about your day.
+  TIMERS → whisper:0.570s  first_token:1.632s  llm_total:2.799s  end_to_end:3.368s  chars:75
+
+[04:55:13] Request #03
+  YOU : Okay, I am hungry. I want to eat something. What should I cook?
+  AI  : Why not make a simple salad or a hearty bowl of soup? It's quick and healthy!
+  TIMERS → whisper:0.420s  first_token:2.050s  llm_total:5.476s  end_to_end:5.896s  chars:77
+
+[04:55:30] Request #04
+  YOU : No, so just me something else.
+  AI  : How about baking some cookies or making a pasta dish? Both are delicious and easy to prepare.
+  TIMERS → whisper:0.282s  first_token:1.818s  llm_total:3.025s  end_to_end:3.307s  chars:93
+
+[04:55:57] Request #05
+  YOU : Do you know what we are talking about? new center back.
+  AI  : I'm not sure what you mean by "new center back". Could you please clarify or provide more context?
+  TIMERS → whisper:2.675s  first_token:2.473s  llm_total:4.791s  end_to_end:7.467s  chars:98
+
+[04:56:15] Request #06
+  YOU : What I want to ask is
+  AI  : Sure, go ahead and ask or share what you need help with.
+  TIMERS → whisper:0.973s  first_token:2.267s  llm_total:3.391s  end_to_end:4.364s  chars:56
+
+[04:56:32] Request #07
+  YOU : in this conversation at the beginning what was the first question I asked you? Now you tell me what was the first question I ever asked you today?
+  AI  : It seems like you're trying to recall your previous conversation. The first question you asked me at the beginning was, "I just want to talk."
+  TIMERS → whisper:0.700s  first_token:1.863s  llm_total:4.418s  end_to_end:5.118s  chars:142
+
+[04:56:55] Request #08
+  YOU : Oh, you remember.
+  AI  : Yes, I do. What else would you like to discuss or ask?
+  TIMERS → whisper:0.284s  first_token:2.337s  llm_total:5.093s  end_to_end:5.378s  chars:54
+
+[04:57:11] EVENT: Client disconnected
+
+╔══════════════════════════════════════════════════════╗
+  Session ended: 2026-03-01 04:57:11  (duration: 167s, 8 requests)
+╚══════════════════════════════════════════════════════╝

@@ -51,19 +51,49 @@ SILENCE_DURATION = 0.5
 MIN_SPEECH = 0.3
 ROLLING_WINDOW_SEC = 8.0
 
+# ── Feature toggles ───────────────────────────────────────────────────────────
+# ENABLE_STT : True  → mic is captured, sent to server, Whisper runs normally.
+#              False → voice input is fully disabled on the client (no mic, no
+#                      audio sent). The server also skips loading Whisper.
+#                      Useful for text-only / keyboard-input mode.
+ENABLE_STT = True
+
+# ENABLE_TTS : True  → AI responses are spoken aloud by the server (or client,
+#                      depending on TTS_MODE).
+#              False → no TTS engine is created anywhere; responses are
+#                      text-only. Fillers are also suppressed.
+#                      Useful for silent / screen-reader environments.
+ENABLE_TTS = True
+
+# ── Output mode ───────────────────────────────────────────────────────────────
+# SHOW_TEXT : True  → response text is streamed to the client terminal.
+# PLAY_SPEECH: True → response is spoken aloud (also requires ENABLE_TTS=True).
+SHOW_TEXT = True
+PLAY_SPEECH = True
+
 # ── TTS ────────────────────────────────────────────────────────────────────────
-# Switch between "native" (macOS pyttsx3) and "kokoro" (neural voice)
-TTS_ENGINE = "native"  # ← change to "kokoro" for high-quality neural voice
+# TTS_MODE (only relevant when ENABLE_TTS = True):
+#   "server" → server speaks directly through its own speakers (default).
+#   "client" → client receives llm_token stream and speaks locally.
+TTS_MODE = "server"
 
-# Native engine settings (used when TTS_ENGINE = "native")
-TTS_RATE = 185  # words per minute — try 150-220
-TTS_VOLUME = 1.0  # 0.0 to 1.0
-TTS_VOICE_INDEX = (
-    138  # 138=Samantha (natural American female) — change to 112 for Reed male
-)
+# Server TTS backend (only used when TTS_MODE = "server")
+#   "native"  — macOS `say` command, works out of the box.
+#   "kokoro"  — neural voice, requires: pip install kokoro-onnx
+TTS_SERVER_BACKEND = "native"
 
-# Kokoro engine settings (used when TTS_ENGINE = "kokoro")
+# Client TTS engine (only used when TTS_MODE = "client")
+#   "native"  — macOS say-based player.
+#   "kokoro"  — neural voice.
+TTS_ENGINE = "native"
+
+# Native TTS settings
+TTS_RATE = 170  # words per minute — 160-180 sounds most natural
+TTS_VOLUME = 1.0  # 0.0 – 1.0
+TTS_VOICE_INDEX = 138  # 138=Samantha | 86=Karen (AU) | 171=Tessa | 112=Reed (♂)
+
+# Kokoro TTS settings
 # Voices: af_heart, af_bella, af_sarah, am_adam, am_michael,
 #         bf_emma, bf_isabella, bm_george, bm_lewis
 TTS_KOKORO_VOICE = "af_heart"
-TTS_KOKORO_SPEED = 1.0  # 0.5 = slow, 1.0 = normal, 1.3 = fast
+TTS_KOKORO_SPEED = 1.0  # 0.5=slow  1.0=normal  1.3=fast
