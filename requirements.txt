@@ -4,7 +4,11 @@ flask-cors
 torch
 openai-whisper
 gTTS
+
 # llama-cpp-python
+
+# CMAKE_ARGS="-DLLAMA_METAL=on" pip install llama-cpp-python --no-cache-dir
+
 Pillow
 requests
 numpy
@@ -18,3 +22,5 @@ flask-sock
 websocket-client
 pyttsx3 
 sounddevice
+onnxruntime 
+transformers

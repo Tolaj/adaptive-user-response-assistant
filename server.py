@@ -30,7 +30,19 @@ from flask import Flask, request, jsonify
 from flask_cors import CORS
 from flask_sock import Sock
 
-from config import WHISPER_MODEL_NAME, WHISPER_SAMPLE_RATE, BASE_DIR
+from config import (
+    WHISPER_MODEL_NAME,
+    WHISPER_SAMPLE_RATE,
+    BASE_DIR,
+    ENABLE_STT,
+    ENABLE_TTS,
+    TTS_MODE,
+    SUPERTONIC_VOICE,
+    SUPERTONIC_LANGUAGE,
+    SUPERTONIC_STEPS,
+    SUPERTONIC_SPEED,
+    SHOW_TEXT,
+)
 from audio.audio_utils import load_audio_as_array
 from transcription.whisper_loader import (
     get_model as get_whisper,
@@ -44,17 +56,6 @@ from llm.llm_engine import (
     ConversationHistory,
     is_loaded as llm_loaded,
 )
-from config import (
-    ENABLE_STT,
-    ENABLE_TTS,
-    TTS_MODE,
-    TTS_SERVER_BACKEND,
-    TTS_KOKORO_VOICE,
-    TTS_KOKORO_SPEED,
-    TTS_RATE,
-    TTS_VOICE_INDEX,
-    SHOW_TEXT,
-)
 
 if ENABLE_TTS and TTS_MODE == "server":
     from server_tts.tts_engine import ServerTTSEngine
@@ -66,6 +67,7 @@ _SILENCE_DURATION = 1.2
 
 LOGS_DIR = BASE_DIR / "logs"
 LOGS_DIR.mkdir(exist_ok=True)
+from config import *
 
 
 class ConversationLogger:
@@ -160,6 +162,8 @@ def create_app() -> Flask:
                 "llm_loaded": llm_loaded(),
                 "enable_stt": ENABLE_STT,
                 "enable_tts": ENABLE_TTS,
+                "tts_mode": TTS_MODE,
+                "tts_backend": TTS_SERVER_BACKEND if TTS_MODE == "server" else "n/a",
             }
         )
 
@@ -213,20 +217,15 @@ def create_app() -> Flask:
         server_tts = None
         if ENABLE_TTS and TTS_MODE == "server":
             server_tts = ServerTTSEngine(
-                backend=TTS_SERVER_BACKEND,
-                rate=TTS_RATE,
-                voice_index=TTS_VOICE_INDEX,
-                voice=TTS_KOKORO_VOICE,
-                speed=TTS_KOKORO_SPEED,
+                voice=SUPERTONIC_VOICE,
+                speed=SUPERTONIC_SPEED,
+                steps=SUPERTONIC_STEPS,
+                language=SUPERTONIC_LANGUAGE,
             )
 
         def run_llm(user_text: str, t_eos: float):
             if not user_text.strip():
                 return
-
-            # resume() was moved to trigger_eos() so it runs BEFORE
-            # speak_filler() is enqueued — eliminating the race condition
-            # where feed_token() checked _interrupted while it was still True.
 
             t_llm_start = time.time()
             whisper_lat = t_llm_start - t_eos
@@ -236,7 +235,6 @@ def create_app() -> Flask:
                 send({"type": "llm_start"})
 
             if server_tts:
-                # resume() already called in trigger_eos() — don't call again
                 send({"type": "tts_start"})
 
             full = ""
@@ -270,7 +268,6 @@ def create_app() -> Flask:
                 )
                 if SHOW_TEXT:
                     send({"type": "llm_done", "text": full})
-
                 if server_tts:
                     send({"type": "tts_done"})
 
@@ -293,15 +290,9 @@ def create_app() -> Flask:
                 if text and text.strip():
                     if SHOW_TEXT:
                         send({"type": "final", "text": text})
-                    # FIX: resume() MUST come before speak_filler().
-                    # interrupt() left _interrupted=True. If speak_filler()
-                    # or feed_token() run while it's still True, the worker
-                    # skips those items — silent speech dropout.
-                    # Clearing the flag first guarantees every item queued
-                    # from this point onward will be spoken.
                     if server_tts:
-                        server_tts.resume()  # ← clear flag FIRST
-                        server_tts.speak_filler()  # ← then enqueue filler
+                        server_tts.resume()  # clear flag FIRST
+                        server_tts.speak_filler()  # then enqueue filler
                     threading.Thread(
                         target=run_llm, args=(text, t_eos), daemon=True
                     ).start()

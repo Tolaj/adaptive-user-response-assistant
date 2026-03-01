@@ -26,7 +26,7 @@ print(f"[Config] Using device: {WHISPER_DEVICE}")
 
 # ── LLM ────────────────────────────────────────────────────────────────────────
 ACTIVE_LLM_MODEL = "qwen2.5-3b"
-GPU_LAYERS = -1  # -1 = all layers on Metal GPU
+GPU_LAYERS = 36  # -1 = all layers on Metal GPU
 CONTEXT_SIZE = 2048
 CPU_THREADS = max(1, os.cpu_count() // 2)
 
@@ -52,48 +52,31 @@ MIN_SPEECH = 0.3
 ROLLING_WINDOW_SEC = 8.0
 
 # ── Feature toggles ───────────────────────────────────────────────────────────
-# ENABLE_STT : True  → mic is captured, sent to server, Whisper runs normally.
-#              False → voice input is fully disabled on the client (no mic, no
-#                      audio sent). The server also skips loading Whisper.
-#                      Useful for text-only / keyboard-input mode.
+# ENABLE_STT : True  → mic captured, sent to server, Whisper runs normally.
+#              False → voice input disabled; server skips loading Whisper.
 ENABLE_STT = True
 
-# ENABLE_TTS : True  → AI responses are spoken aloud by the server (or client,
-#                      depending on TTS_MODE).
-#              False → no TTS engine is created anywhere; responses are
-#                      text-only. Fillers are also suppressed.
-#                      Useful for silent / screen-reader environments.
+# ENABLE_TTS : True  → AI responses are spoken aloud.
+#              False → text-only; no TTS engine created anywhere.
 ENABLE_TTS = True
 
 # ── Output mode ───────────────────────────────────────────────────────────────
 # SHOW_TEXT : True  → response text is streamed to the client terminal.
-# PLAY_SPEECH: True → response is spoken aloud (also requires ENABLE_TTS=True).
 SHOW_TEXT = True
-PLAY_SPEECH = True
 
-# ── TTS ────────────────────────────────────────────────────────────────────────
+# ── TTS mode ──────────────────────────────────────────────────────────────────
 # TTS_MODE (only relevant when ENABLE_TTS = True):
-#   "server" → server speaks directly through its own speakers (default).
+#   "server" → server speaks through its own speakers.
 #   "client" → client receives llm_token stream and speaks locally.
-TTS_MODE = "server"
+TTS_MODE = "client"
+TTS_SERVER_BACKEND = "supertonic2"  # "supertonic2" or "vibevoice"
+# ── TTS backend ───────────────────────────────────────────────────────────────
+# Supertonic 2 ONNX is used for all TTS (server and client).
+# Requires: pip install onnxruntime transformers huggingface_hub sounddevice soundfile
 
-# Server TTS backend (only used when TTS_MODE = "server")
-#   "native"  — macOS `say` command, works out of the box.
-#   "kokoro"  — neural voice, requires: pip install kokoro-onnx
-TTS_SERVER_BACKEND = "native"
-
-# Client TTS engine (only used when TTS_MODE = "client")
-#   "native"  — macOS say-based player.
-#   "kokoro"  — neural voice.
-TTS_ENGINE = "native"
-
-# Native TTS settings
-TTS_RATE = 170  # words per minute — 160-180 sounds most natural
-TTS_VOLUME = 1.0  # 0.0 – 1.0
-TTS_VOICE_INDEX = 138  # 138=Samantha | 86=Karen (AU) | 171=Tessa | 112=Reed (♂)
-
-# Kokoro TTS settings
-# Voices: af_heart, af_bella, af_sarah, am_adam, am_michael,
-#         bf_emma, bf_isabella, bm_george, bm_lewis
-TTS_KOKORO_VOICE = "af_heart"
-TTS_KOKORO_SPEED = 1.0  # 0.5=slow  1.0=normal  1.3=fast
+# Voice presets : M1 M2 M3 M4 M5  F1 F2 F3 F4 F5
+# Languages     : en  ko  es  pt  fr
+SUPERTONIC_VOICE = "F1"  # voice preset
+SUPERTONIC_LANGUAGE = "en"  # language tag
+SUPERTONIC_STEPS = 5  # denoising steps — more = higher quality (max 50)
+SUPERTONIC_SPEED = 1.3  # 0.5 = slow · 1.0 = normal · 1.3 = fast
