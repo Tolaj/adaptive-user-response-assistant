@@ -56,7 +56,6 @@ from config import (
     SHOW_TEXT,
 )
 
-# Only import the TTS engine when it might actually be used.
 if ENABLE_TTS and TTS_MODE == "server":
     from server_tts.tts_engine import ServerTTSEngine
 
@@ -70,12 +69,6 @@ LOGS_DIR.mkdir(exist_ok=True)
 
 
 class ConversationLogger:
-    """
-    Writes a human-readable log file per session.
-    File: logs/conversation_YYYY-MM-DD_HH-MM-SS.log
-    Also prints a clean per-request summary to the server console.
-    """
-
     def __init__(self):
         ts = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
         self._path = LOGS_DIR / f"conversation_{ts}.log"
@@ -172,7 +165,6 @@ def create_app() -> Flask:
 
     @app.route("/transcribe", methods=["POST"])
     def transcribe():
-        # FIX: respect ENABLE_STT flag on the HTTP transcribe endpoint too.
         if not ENABLE_STT:
             return jsonify({"error": "STT is disabled on this server"}), 503
         if "file" not in request.files:
@@ -201,7 +193,6 @@ def create_app() -> Flask:
         logger = ConversationLogger()
         logger.log_event("Client connected")
 
-        # FIX: only load Whisper when STT is enabled.
         if ENABLE_STT:
             get_whisper()
         get_llm()
@@ -219,10 +210,6 @@ def create_app() -> Flask:
                 pass
 
         # ── Server TTS engine ─────────────────────────────────────────────
-        # FIX: gate on ENABLE_TTS as well as TTS_MODE.
-        # PLAY_SPEECH was imported but never used before — it now acts as a
-        # secondary guard so you can keep TTS_MODE="server" but silence output
-        # without touching ENABLE_TTS (e.g. for logging-only sessions).
         server_tts = None
         if ENABLE_TTS and TTS_MODE == "server":
             server_tts = ServerTTSEngine(
@@ -237,9 +224,9 @@ def create_app() -> Flask:
             if not user_text.strip():
                 return
 
-            # Wait for filler to finish before the main response starts.
-            if server_tts:
-                server_tts.wait_until_done(timeout=1.5)
+            # resume() was moved to trigger_eos() so it runs BEFORE
+            # speak_filler() is enqueued — eliminating the race condition
+            # where feed_token() checked _interrupted while it was still True.
 
             t_llm_start = time.time()
             whisper_lat = t_llm_start - t_eos
@@ -249,8 +236,7 @@ def create_app() -> Flask:
                 send({"type": "llm_start"})
 
             if server_tts:
-                server_tts.resume()
-                # Tell client the server is about to speak.
+                # resume() already called in trigger_eos() — don't call again
                 send({"type": "tts_start"})
 
             full = ""
@@ -285,14 +271,11 @@ def create_app() -> Flask:
                 if SHOW_TEXT:
                     send({"type": "llm_done", "text": full})
 
-                # Notify client that server speech has ended.
                 if server_tts:
                     send({"type": "tts_done"})
 
         def trigger_eos(force: bool = False):
             nonlocal silence_accumulated, in_speech
-            # Discard audio that arrives while the server is speaking — it's
-            # just the microphone picking up the TTS output.
             if not force and server_tts and server_tts.is_speaking():
                 silence_accumulated = 0
                 in_speech = False
@@ -310,9 +293,15 @@ def create_app() -> Flask:
                 if text and text.strip():
                     if SHOW_TEXT:
                         send({"type": "final", "text": text})
-                    # Fire a filler immediately to bridge LLM latency.
+                    # FIX: resume() MUST come before speak_filler().
+                    # interrupt() left _interrupted=True. If speak_filler()
+                    # or feed_token() run while it's still True, the worker
+                    # skips those items — silent speech dropout.
+                    # Clearing the flag first guarantees every item queued
+                    # from this point onward will be spoken.
                     if server_tts:
-                        server_tts.speak_filler()
+                        server_tts.resume()  # ← clear flag FIRST
+                        server_tts.speak_filler()  # ← then enqueue filler
                     threading.Thread(
                         target=run_llm, args=(text, t_eos), daemon=True
                     ).start()
@@ -324,9 +313,8 @@ def create_app() -> Flask:
                 send({"type": "partial", "text": text})
 
         def on_final(text: str):
-            pass  # LLM is triggered only via trigger_eos
+            pass
 
-        # FIX: only create and start the transcriber when STT is enabled.
         transcriber = None
         if ENABLE_STT:
             transcriber = StreamingTranscriber(
@@ -360,12 +348,9 @@ def create_app() -> Flask:
                         send({"type": "pong"})
                     continue
 
-                # ── Binary audio frame ────────────────────────────────────
                 if isinstance(message, bytes) and len(message) >= 4:
-                    # FIX: if STT is disabled, ignore all incoming audio.
                     if not ENABLE_STT or transcriber is None:
                         continue
-                    # Drop mic audio while the server is speaking (echo gate).
                     if server_tts and server_tts.is_speaking():
                         silence_accumulated = 0
                         in_speech = False
