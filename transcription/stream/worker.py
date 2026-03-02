@@ -1,0 +1,30 @@
+import threading
+import time
+
+from config.vad import TRANSCRIBE_EVERY
+
+
+def start_worker(state: dict) -> None:
+    state["running"] = True
+    t = threading.Thread(target=_loop, args=(state,), daemon=True)
+    t.start()
+    state["worker_thread"] = t
+
+
+def stop_worker(state: dict) -> None:
+    state["running"] = False
+    t = state.get("worker_thread")
+    if t:
+        t.join(timeout=5)
+    state["worker_thread"] = None
+
+
+def _loop(state: dict) -> None:
+    while state["running"]:
+        time.sleep(TRANSCRIBE_EVERY)
+        from transcription.stream.partial import run_partial_pass
+
+        text = run_partial_pass(state["buf"])
+        if text and text != state["last_text"]:
+            state["last_text"] = text
+            state["on_partial"](text)

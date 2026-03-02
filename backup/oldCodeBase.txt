@@ -1,0 +1,2706 @@
+# PromptPack Output
+**Root:** `/Users/swapnil/Documents/Projects/adaptive-user-response-assistant`
+**Generated:** 2026-03-02T17:20:03.732Z
+---
+## 1) Folder Structure
+.
+├─ audio/
+│  └─ audio_utils.py
+├─ client/
+│  ├─ native_player.py
+│  ├─ supertonic_player.py
+│  ├─ tts_player.py
+│  ├─ vad.py
+│  └─ voice_client.py
+├─ config.py
+├─ llm/
+│  └─ llm_engine.py
+├─ logs/
+├─ main.py
+├─ requirements.txt
+├─ server_tts/
+│  ├─ __init__.py
+│  └─ tts_engine.py
+├─ server.py
+├─ transcription/
+│  ├─ streaming_transcriber.py
+│  ├─ transcriber.py
+│  └─ whisper_loader.py
+└─ tts/
+   └─ supertonic_model.py
+<!-- PAGE BREAK: FILE CONTENTS BELOW -->
+## 2) File Contents
+### audio/audio_utils.py
+"""
+audio/audio_utils.py
+Helpers for loading and converting audio files.
+No ffmpeg required — uses soundfile + resampy.
+"""
+
+import numpy as np
+import soundfile as sf
+import resampy
+
+from config import WHISPER_SAMPLE_RATE
+
+
+def load_audio_as_array(path: str) -> np.ndarray:
+    """
+    Load a WAV file and return a 16 kHz float32 mono numpy array
+    ready for Whisper.
+    """
+    audio, sr = sf.read(path)
+
+    # Stereo → mono
+    if len(audio.shape) > 1:
+        audio = audio.mean(axis=1)
+
+    audio = audio.astype(np.float32)
+
+    # Resample to Whisper's expected sample rate
+    if sr != WHISPER_SAMPLE_RATE:
+        audio = resampy.resample(audio, sr, WHISPER_SAMPLE_RATE)
+
+    return audio
+
+
+def numpy_to_wav(audio: np.ndarray, path: str, sample_rate: int = WHISPER_SAMPLE_RATE) -> str:
+    """Write a float32 numpy array to a WAV file. Returns the path."""
+    sf.write(path, audio, sample_rate)
+    return path
+
+### client/native_player.py
+"""
+client/native_player.py
+
+Client-side TTS player using macOS `say` command.
+
+Implements the same interface as SupertonicPlayer:
+    .feed_token(token)
+    .flush()
+    .interrupt()
+    .resume()
+    .is_speaking() → bool
+    .shutdown()
+"""
+
+import re
+import queue
+import threading
+import subprocess
+import time
+
+from config import TTS_RATE, TTS_VOICE_INDEX
+
+# ── Sentence / clause splitter ────────────────────────────────────────────────
+
+_SENTENCE_END = re.compile(r"(?<![A-Z][a-z])(?<!\d)([.?!])(\s+|$)")
+_CLAUSE_BREAK = re.compile(r"[,;:]\s+")
+
+MIN_CHUNK_CHARS = 6
+MERGE_WINDOW_SEC = 0.05
+
+
+def _split_sentence(buf: str) -> tuple[str, str]:
+    m = _SENTENCE_END.search(buf)
+    if m:
+        return buf[: m.end()].strip(), buf[m.end() :]
+    m = _CLAUSE_BREAK.search(buf)
+    if m and m.start() >= MIN_CHUNK_CHARS:
+        return buf[: m.start()].strip(), buf[m.end() :]
+    return "", buf
+
+
+def _clean_text(text: str) -> str:
+    text = re.sub(r"\*+", "", text)
+    text = re.sub(r"_+", "", text)
+    text = re.sub(r"`+", "", text)
+    text = re.sub(r"\s+", " ", text)
+    return text.strip()
+
+
+# ── Player ────────────────────────────────────────────────────────────────────
+
+
+class NativeTTSPlayer:
+    def __init__(self, rate: int = TTS_RATE, voice_index: int = TTS_VOICE_INDEX):
+        self._rate = rate
+        self._voice_name = "Samantha"
+        self._proc = None
+        self._proc_lock = threading.Lock()
+
+        self._token_buf = ""
+        self._queue: queue.Queue = queue.Queue()
+        self._interrupted = threading.Event()
+        self._speaking = threading.Event()
+
+        self._resolve_voice(voice_index)
+
+        self._worker = threading.Thread(target=self._loop, daemon=True)
+        self._worker.start()
+
+    # ── Public interface ──────────────────────────────────────────────────────
+
+    def feed_token(self, token: str) -> None:
+        if self._interrupted.is_set():
+            return
+        self._token_buf += token
+        while True:
+            sentence, remainder = _split_sentence(self._token_buf)
+            if sentence and len(sentence) >= MIN_CHUNK_CHARS:
+                self._token_buf = remainder
+                self._queue.put(sentence)
+            else:
+                break
+        if len(self._token_buf.split()) >= 8:
+            text = self._token_buf.strip()
+            self._token_buf = ""
+            if text:
+                self._queue.put(text)
+
+    def flush(self) -> None:
+        text = self._token_buf.strip()
+        self._token_buf = ""
+        if text and len(text) >= 2:
+            self._queue.put(text)
+
+    def interrupt(self) -> None:
+        self._interrupted.set()
+        while not self._queue.empty():
+            try:
+                self._queue.get_nowait()
+            except queue.Empty:
+                break
+        with self._proc_lock:
+            if self._proc and self._proc.poll() is None:
+                self._proc.terminate()
+                try:
+                    self._proc.wait(timeout=0.5)
+                except Exception:
+                    pass
+
+    def resume(self) -> None:
+        self._token_buf = ""
+        self._interrupted.clear()
+
+    def is_speaking(self) -> bool:
+        return self._speaking.is_set()
+
+    def shutdown(self) -> None:
+        self.interrupt()
+        self._queue.put(None)
+        self._worker.join(timeout=3)
+
+    # ── Internals ─────────────────────────────────────────────────────────────
+
+    def _resolve_voice(self, voice_index: int) -> None:
+        try:
+            out = subprocess.check_output(["say", "-v", "?"], text=True, timeout=5)
+            voices = [
+                line.split()[0] for line in out.strip().splitlines() if line.strip()
+            ]
+            self._voice_name = (
+                voices[voice_index] if voice_index < len(voices) else "Samantha"
+            )
+        except Exception:
+            self._voice_name = "Samantha"
+        print(f"[NativeTTS] Ready — voice={self._voice_name}, rate={self._rate} wpm")
+
+    def _say(self, text: str) -> None:
+        cmd = ["say", "-v", self._voice_name, "-r", str(self._rate), text]
+        with self._proc_lock:
+            if self._interrupted.is_set():
+                return
+            self._proc = subprocess.Popen(cmd)
+        self._proc.wait()
+        with self._proc_lock:
+            self._proc = None
+
+    def _loop(self) -> None:
+        while True:
+            item = self._queue.get()
+            if item is None:
+                break
+            if self._interrupted.is_set():
+                continue
+
+            # Merge window — batch same-burst chunks into one `say` call
+            collected = [item]
+            deadline = time.time() + MERGE_WINDOW_SEC
+            while time.time() < deadline:
+                try:
+                    nxt = self._queue.get_nowait()
+                    if nxt is None:
+                        self._queue.put(None)
+                        break
+                    collected.append(nxt)
+                except queue.Empty:
+                    time.sleep(0.005)
+
+            if self._interrupted.is_set():
+                continue
+
+            merged = " ".join(_clean_text(c) for c in collected if c and c.strip())
+            if not merged:
+                continue
+
+            self._speaking.set()
+            try:
+                self._say(merged)
+            except Exception as e:
+                print(f"[NativeTTS] Error: {e}")
+            finally:
+                self._speaking.clear()
+
+### client/supertonic_player.py
+"""
+client/supertonic_player.py
+
+Client-side Supertonic 2 TTS player.
+
+Implements the same interface used by voice_client.py:
+    .feed_token(token)
+    .flush()
+    .interrupt()
+    .resume()
+    .is_speaking() → bool
+    .shutdown()
+
+Design
+──────
+Supertonic generates a complete audio clip per text chunk (not streaming),
+so we use the same sentence-boundary queue + worker thread pattern as the
+server-side engine. Tokens are accumulated, split on sentence/clause
+boundaries, and queued for the worker which generates + plays each chunk.
+
+A MERGE WINDOW (50 ms) batches same-burst chunks into a single generate()
+call so the full response gets natural prosody instead of per-sentence gaps.
+"""
+
+import re
+import queue
+import threading
+import time
+
+from config import (
+    SUPERTONIC_VOICE,
+    SUPERTONIC_LANGUAGE,
+    SUPERTONIC_STEPS,
+    SUPERTONIC_SPEED,
+)
+
+# ── Sentence / clause splitter ────────────────────────────────────────────────
+
+_SENTENCE_END = re.compile(r"(?<![A-Z][a-z])(?<!\d)([.?!])(\s+|$)")
+_CLAUSE_BREAK = re.compile(r"[,;:]\s+")
+
+MIN_CHUNK_CHARS = 6
+MERGE_WINDOW_SEC = 0.05
+
+
+def _split_sentence(buf: str) -> tuple[str, str]:
+    m = _SENTENCE_END.search(buf)
+    if m:
+        return buf[: m.end()].strip(), buf[m.end() :]
+    m = _CLAUSE_BREAK.search(buf)
+    if m and m.start() >= MIN_CHUNK_CHARS:
+        return buf[: m.start()].strip(), buf[m.end() :]
+    return "", buf
+
+
+def _clean_text(text: str) -> str:
+    text = re.sub(r"\*+", "", text)
+    text = re.sub(r"_+", "", text)
+    text = re.sub(r"`+", "", text)
+    text = re.sub(r"\s+", " ", text)
+    return text.strip()
+
+
+# ── Queue item ────────────────────────────────────────────────────────────────
+
+
+class _Item:
+    __slots__ = ("text",)
+
+    def __init__(self, text: str):
+        self.text = text
+
+
+# ── Player ────────────────────────────────────────────────────────────────────
+
+
+class SupertonicPlayer:
+    """
+    Client-side Supertonic TTS.
+
+    Usage (same as NativeTTSPlayer / KokoroPlayer):
+        player = SupertonicPlayer()
+        player.feed_token("Hello ")
+        player.feed_token("world!")
+        player.flush()
+        # ... later ...
+        player.interrupt()
+        player.resume()
+        player.shutdown()
+    """
+
+    def __init__(
+        self,
+        voice: str = SUPERTONIC_VOICE,
+        language: str = SUPERTONIC_LANGUAGE,
+        steps: int = SUPERTONIC_STEPS,
+        speed: float = SUPERTONIC_SPEED,
+    ):
+        self._voice = voice
+        self._language = language
+        self._steps = steps
+        self._speed = speed
+
+        self._token_buf = ""
+        self._queue: queue.Queue[_Item | None] = queue.Queue()
+        self._interrupted = threading.Event()
+        self._speaking = threading.Event()
+        self._model = None  # loaded lazily in worker thread
+
+        self._worker = threading.Thread(target=self._loop, daemon=True)
+        self._worker.start()
+
+    # ── Public interface ──────────────────────────────────────────────────────
+
+    def feed_token(self, token: str) -> None:
+        """Accumulate token; push complete sentences/clauses to the queue."""
+        if self._interrupted.is_set():
+            return
+        self._token_buf += token
+        while True:
+            sentence, remainder = _split_sentence(self._token_buf)
+            if sentence and len(sentence) >= MIN_CHUNK_CHARS:
+                self._token_buf = remainder
+                self._queue.put(_Item(sentence))
+            else:
+                break
+        # Safety flush at 8 words for long run-on sentences
+        if len(self._token_buf.split()) >= 8:
+            text = self._token_buf.strip()
+            self._token_buf = ""
+            if text:
+                self._queue.put(_Item(text))
+
+    def flush(self) -> None:
+        """Push any remaining buffer at end of LLM stream."""
+        text = self._token_buf.strip()
+        self._token_buf = ""
+        if text and len(text) >= 2:
+            self._queue.put(_Item(text))
+
+    def interrupt(self) -> None:
+        """Stop playback immediately and drain the pending queue."""
+        self._interrupted.set()
+        while not self._queue.empty():
+            try:
+                self._queue.get_nowait()
+            except queue.Empty:
+                break
+        from tts.supertonic_model import stop_audio
+
+        stop_audio()
+
+    def resume(self) -> None:
+        """Clear interrupted flag; must be called before the next feed_token()."""
+        self._token_buf = ""
+        self._interrupted.clear()
+
+    def is_speaking(self) -> bool:
+        return self._speaking.is_set()
+
+    def shutdown(self) -> None:
+        self.interrupt()
+        self._queue.put(None)  # sentinel to exit worker
+        self._worker.join(timeout=3)
+
+    # ── Worker ────────────────────────────────────────────────────────────────
+
+    def _ensure_model(self):
+        if self._model is None:
+            from tts.supertonic_model import get_model
+
+            self._model = get_model()
+
+    def _loop(self) -> None:
+        # Load model once (in the worker thread, not the main thread)
+        self._ensure_model()
+
+        while True:
+            item = self._queue.get()
+            if item is None:
+                break
+            if self._interrupted.is_set():
+                continue
+
+            # ── MERGE WINDOW ──────────────────────────────────────────────────
+            # Batch chunks arriving within 50 ms into one generate() call so a
+            # full response gets natural prosody and fewer synthesis round-trips.
+            collected = [item]
+            deadline = time.time() + MERGE_WINDOW_SEC
+            while time.time() < deadline:
+                try:
+                    nxt = self._queue.get_nowait()
+                    if nxt is None:
+                        self._queue.put(None)
+                        break
+                    collected.append(nxt)
+                except queue.Empty:
+                    time.sleep(0.005)
+
+            if self._interrupted.is_set():
+                continue
+
+            merged = " ".join(_clean_text(c.text) for c in collected if c.text.strip())
+            if not merged:
+                continue
+
+            self._speaking.set()
+            try:
+                audio = self._model.generate_one(
+                    merged,
+                    voice=self._voice,
+                    speed=self._speed,
+                    steps=self._steps,
+                    language=self._language,
+                )
+                from tts.supertonic_model import play_audio
+
+                play_audio(audio, self._model.SAMPLE_RATE)
+            except Exception as e:
+                print(f"[SupertonicPlayer] Error: {e}")
+            finally:
+                self._speaking.clear()
+
+### client/tts_player.py
+"""
+client/tts_player.py
+
+Client-side TTS — Supertonic 2 only.
+"""
+
+from client.supertonic_player import SupertonicPlayer
+
+
+def create_tts_player() -> SupertonicPlayer:
+    return SupertonicPlayer()
+
+### client/vad.py
+"""
+client/vad.py
+Voice Activity Detection state machine.
+
+Two firing modes:
+  1. Silence boundary  — fires when speech is followed by N seconds of silence (short utterances)
+  2. Rolling window    — fires every ROLLING_WINDOW_SEC while you keep talking (long utterances)
+     After a rolling flush the buffer is cleared so the next chunk is fresh.
+"""
+
+from typing import Callable
+
+import numpy as np
+
+from config import (
+    RECORD_SAMPLE_RATE,
+    SILENCE_THRESHOLD,
+    SILENCE_DURATION,
+    MIN_SPEECH,
+    ROLLING_WINDOW_SEC,
+)
+
+
+class VADProcessor:
+    """
+    Stateful VAD processor.  Feed audio chunks via process_chunk().
+    Fires on_speech_end with a float32 numpy array when:
+      - silence boundary is detected (end of utterance), OR
+      - speech has been continuous for ROLLING_WINDOW_SEC seconds.
+
+    Parameters
+    ----------
+    on_speech_end     : callable(np.ndarray)
+    sample_rate       : int
+    silence_threshold : float
+    silence_duration  : float   seconds of silence → end of utterance
+    min_speech        : float   minimum utterance length to emit
+    rolling_window    : float   emit mid-utterance every N seconds of continuous speech
+    """
+
+    def __init__(
+        self,
+        on_speech_end:     Callable[[np.ndarray], None],
+        sample_rate:       int   = RECORD_SAMPLE_RATE,
+        silence_threshold: float = SILENCE_THRESHOLD,
+        silence_duration:  float = SILENCE_DURATION,
+        min_speech:        float = MIN_SPEECH,
+        rolling_window:    float = ROLLING_WINDOW_SEC,
+    ):
+        self.on_speech_end     = on_speech_end
+        self.sample_rate       = sample_rate
+        self.silence_threshold = silence_threshold
+        self.silence_need      = int(silence_duration  * sample_rate)
+        self.speech_need       = int(min_speech        * sample_rate)
+        self.rolling_need      = int(rolling_window    * sample_rate)
+
+        self._reset()
+
+    # ── Public API ────────────────────────────────────────────────────────────
+
+    def process_chunk(self, chunk: np.ndarray) -> None:
+        """Feed one audio block (float32, mono)."""
+        flat = chunk.flatten()
+        amp  = float(np.abs(flat).mean())
+
+        if amp > self.silence_threshold:
+            # ── Active speech ──────────────────────────────────────────────
+            self._in_speech = True
+            self._speech_buf.append(flat)
+            self._silence_buf = []
+
+            # Rolling window: emit if we've accumulated enough continuous speech
+            speech_samples = sum(len(f) for f in self._speech_buf)
+            if speech_samples >= self.rolling_need:
+                audio = np.concatenate(self._speech_buf).astype(np.float32)
+                self._speech_buf  = []   # clear — next window starts fresh
+                self._silence_buf = []
+                # keep _in_speech = True so recording continues uninterrupted
+                self.on_speech_end(audio)
+
+        elif self._in_speech:
+            # ── Trailing silence after speech ──────────────────────────────
+            self._silence_buf.append(flat)
+            self._speech_buf.append(flat)
+
+            silence_samples = sum(len(f) for f in self._silence_buf)
+            if silence_samples >= self.silence_need:
+                self._flush()
+
+    def flush(self) -> None:
+        """Force-flush any buffered speech (e.g. on stream stop)."""
+        if self._in_speech and self._speech_buf:
+            self._flush()
+
+    # ── Internals ─────────────────────────────────────────────────────────────
+
+    def _flush(self) -> None:
+        audio = np.concatenate(self._speech_buf).astype(np.float32)
+        self._reset()
+        if len(audio) >= self.speech_need:
+            self.on_speech_end(audio)
+
+    def _reset(self) -> None:
+        self._in_speech   = False
+        self._speech_buf  = []
+        self._silence_buf = []
+
+### client/voice_client.py
+"""
+client/voice_client.py
+
+Microphone → Smart VAD → WebSocket → Whisper STT → LLM → TTS speaker.
+Run:  python -m client.voice_client
+
+Display:
+  grey  ... partial transcript while you speak
+  blue  YOU: final transcript
+  green AI : response text (streamed) + spoken aloud simultaneously
+
+Commands:
+  clear  → reset conversation memory
+  quit   → exit
+"""
+
+import sys
+import json
+import queue
+import threading
+
+import numpy as np
+import sounddevice as sd
+import resampy
+import websocket
+
+from config import (
+    TTS_MODE,
+    ENABLE_STT,
+    ENABLE_TTS,
+    RECORD_SAMPLE_RATE,
+    WHISPER_SAMPLE_RATE,
+    ENERGY_THRESHOLD,
+    MIN_SPEECH_SEC,
+    PAUSE_SECONDS,
+)
+
+# Only import tts_player when we actually need client-side TTS.
+if ENABLE_TTS and TTS_MODE == "client":
+    from client.tts_player import create_tts_player
+
+SERVER_WS = "ws://localhost:5001/ws/transcribe"
+SERVER_HTTP = "http://localhost:5001/health"
+
+# ── Smart VAD config ──────────────────────────────────────────────────────────
+# ENERGY_THRESHOLD = 0.015
+ZCR_WEIGHT = 0.4
+SPEECH_PAD_MS = 150
+# PAUSE_SECONDS = 1.5
+# MIN_SPEECH_SEC = 0.4
+CHUNK_MS = 30
+
+
+# ── Null TTS stub (used when TTS is disabled or in server-TTS mode) ───────────
+
+
+class _NullTTS:
+    """Drop-in replacement that does nothing — keeps the rest of the code clean."""
+
+    def is_speaking(self) -> bool:
+        return False
+
+    def interrupt(self) -> None:
+        pass
+
+    def resume(self) -> None:
+        pass
+
+    def feed_token(self, token: str) -> None:
+        pass
+
+    def flush(self) -> None:
+        pass
+
+    def shutdown(self) -> None:
+        pass
+
+
+# ── Smart VAD ─────────────────────────────────────────────────────────────────
+
+
+class SmartVAD:
+    def __init__(self, on_chunk, on_speech_start, on_speech_end):
+        self.on_chunk = on_chunk
+        self.on_speech_start = on_speech_start
+        self.on_speech_end = on_speech_end
+
+        self._pause_samples = int(WHISPER_SAMPLE_RATE * PAUSE_SECONDS)
+        self._min_samples = int(WHISPER_SAMPLE_RATE * MIN_SPEECH_SEC)
+        self._pad_samples = int(RECORD_SAMPLE_RATE * SPEECH_PAD_MS / 1000)
+
+        self._preroll: list[np.ndarray] = []
+        self._preroll_len = 0
+        self._in_speech = False
+        self._silence_count = 0
+        self._speech_samples = 0
+
+    def process(self, chunk: np.ndarray) -> None:
+        flat = chunk.flatten()
+
+        self._preroll.append(flat)
+        self._preroll_len += len(flat)
+        while self._preroll_len > self._pad_samples and self._preroll:
+            removed = self._preroll.pop(0)
+            self._preroll_len -= len(removed)
+
+        is_speech = self._is_speech(flat)
+
+        if is_speech:
+            if not self._in_speech:
+                self._in_speech = True
+                self._silence_count = 0
+                self.on_speech_start()
+                pad = (
+                    np.concatenate(self._preroll)
+                    if self._preroll
+                    else np.array([], dtype=np.float32)
+                )
+                pad_16k = self._resample(pad)
+                if len(pad_16k) > 0:
+                    self.on_chunk(pad_16k)
+                    self._speech_samples += len(pad_16k)
+
+            chunk_16k = self._resample(flat)
+            self.on_chunk(chunk_16k)
+            self._speech_samples += len(chunk_16k)
+            self._silence_count = 0
+
+        elif self._in_speech:
+            chunk_16k = self._resample(flat)
+            self.on_chunk(chunk_16k)
+            self._silence_count += len(chunk_16k)
+            self._speech_samples += len(chunk_16k)
+
+            if self._silence_count >= self._pause_samples:
+                if self._speech_samples >= self._min_samples:
+                    self.on_speech_end()
+                self._in_speech = False
+                self._silence_count = 0
+                self._speech_samples = 0
+
+    def flush(self):
+        if self._in_speech and self._speech_samples >= self._min_samples:
+            self.on_speech_end()
+        self._in_speech = False
+        self._silence_count = 0
+        self._speech_samples = 0
+
+    def _is_speech(self, chunk: np.ndarray) -> bool:
+        if len(chunk) == 0:
+            return False
+        energy = float(np.sqrt(np.mean(chunk**2)))
+        zcr = (
+            float(np.mean(np.abs(np.diff(np.sign(chunk)))) / 2)
+            if len(chunk) > 1
+            else 0.0
+        )
+        return (energy + ZCR_WEIGHT * zcr) > ENERGY_THRESHOLD
+
+    @staticmethod
+    def _resample(audio: np.ndarray) -> np.ndarray:
+        if len(audio) == 0:
+            return audio.astype(np.float32)
+        if RECORD_SAMPLE_RATE == WHISPER_SAMPLE_RATE:
+            return audio.astype(np.float32)
+        return resampy.resample(audio, RECORD_SAMPLE_RATE, WHISPER_SAMPLE_RATE).astype(
+            np.float32
+        )
+
+
+# ── Terminal display ──────────────────────────────────────────────────────────
+
+
+class Display:
+    _lock = threading.Lock()
+    _mid_line = False
+
+    @classmethod
+    def partial(cls, text: str):
+        with cls._lock:
+            print(f"\r  \033[90m... {text:<76}\033[0m", end="", flush=True)
+            cls._mid_line = True
+
+    @classmethod
+    def you(cls, text: str):
+        with cls._lock:
+            if cls._mid_line:
+                print()
+            print(f"  \033[94mYOU:\033[0m {text}", flush=True)
+            cls._mid_line = False
+
+    @classmethod
+    def ai_start(cls):
+        with cls._lock:
+            if cls._mid_line:
+                print()
+            print(f"  \033[92mAI :\033[0m ", end="", flush=True)
+            cls._mid_line = True
+
+    @classmethod
+    def ai_token(cls, token: str):
+        with cls._lock:
+            print(token, end="", flush=True)
+
+    @classmethod
+    def ai_done(cls):
+        with cls._lock:
+            print(flush=True)
+            cls._mid_line = False
+
+    @classmethod
+    def info(cls, text: str):
+        with cls._lock:
+            if cls._mid_line:
+                print()
+            print(f"  \033[90m{text}\033[0m", flush=True)
+            cls._mid_line = False
+
+    @classmethod
+    def error(cls, text: str):
+        with cls._lock:
+            if cls._mid_line:
+                print()
+            print(f"  \033[91m[error] {text}\033[0m", flush=True)
+            cls._mid_line = False
+
+
+# ── WebSocket + TTS client ────────────────────────────────────────────────────
+
+
+class StreamingVoiceClient:
+    def __init__(self):
+        self._ws: websocket.WebSocketApp | None = None
+        self._ws_thread: threading.Thread | None = None
+        self._sender_thread: threading.Thread | None = None
+        self._connected = threading.Event()
+        self._send_q: queue.Queue[bytes | str] = queue.Queue()
+        self._running = False
+
+        # FIX: tracks whether the *server* is currently speaking (server-TTS
+        # mode).  Was referenced in _on_message but never initialised — would
+        # crash with AttributeError on the first tts_start message.
+        self._server_tts_active = threading.Event()
+
+        # FIX: only create a real TTS player when client-side TTS is wanted.
+        # In server-TTS mode (or when TTS is disabled entirely) we use a no-op
+        # stub so the rest of the code can call the same API without branching.
+        if ENABLE_TTS and TTS_MODE == "client":
+            self._tts = create_tts_player()
+        else:
+            self._tts = _NullTTS()
+
+    # ── Public API ────────────────────────────────────────────────────────
+
+    def connect(self) -> bool:
+        self._ws = websocket.WebSocketApp(
+            SERVER_WS,
+            on_open=self._on_open,
+            on_message=self._on_message,
+            on_error=self._on_error,
+            on_close=self._on_close,
+        )
+        self._ws_thread = threading.Thread(
+            target=self._ws.run_forever,
+            kwargs={"ping_interval": 20, "ping_timeout": 10},
+            daemon=True,
+        )
+        self._ws_thread.start()
+        return self._connected.wait(timeout=10)
+
+    def disconnect(self):
+        self._running = False
+        self._tts.shutdown()
+        if self._ws:
+            self._ws.close()
+
+    def send_audio(self, chunk_16k: np.ndarray):
+        if not self._connected.is_set():
+            return
+        # FIX: gate on the correct "is something speaking" source.
+        # In server-TTS mode the server signals via tts_start/tts_done.
+        # In client-TTS mode (or TTS disabled) check the local player.
+        tts_speaking = (
+            self._server_tts_active.is_set()
+            if (ENABLE_TTS and TTS_MODE == "server")
+            else self._tts.is_speaking()
+        )
+        if not tts_speaking:
+            self._send_q.put(chunk_16k.astype(np.float32).tobytes())
+
+    def send_end_of_speech(self):
+        if self._connected.is_set():
+            self._send_q.put(json.dumps({"type": "end_of_speech"}))
+
+    def send_clear_history(self):
+        if self._connected.is_set():
+            self._send_q.put(json.dumps({"type": "clear_history"}))
+
+    def on_user_speech_start(self):
+        """VAD detected speech start — interrupt whatever is currently playing."""
+        # FIX: in server-TTS mode we can't kill the server's subprocess from
+        # here; the server handles its own interruption when it receives audio.
+        # For client-TTS mode, interrupt the local player as before.
+        if ENABLE_TTS and TTS_MODE == "client":
+            self._tts.interrupt()
+
+    def on_user_speech_end(self):
+        """VAD detected speech end — re-enable client TTS if applicable."""
+        # FIX: only meaningful for client-TTS mode.
+        if ENABLE_TTS and TTS_MODE == "client":
+            self._tts.resume()
+
+    # ── WebSocket callbacks ───────────────────────────────────────────────
+
+    def _on_open(self, ws):
+        Display.info("WebSocket connected")
+        self._connected.set()
+        self._running = True
+        self._sender_thread = threading.Thread(target=self._sender_loop, daemon=True)
+        self._sender_thread.start()
+
+    def _on_message(self, ws, message):
+        if isinstance(message, bytes):
+            # Binary frames from the server are not expected in this protocol.
+            return
+
+        try:
+            msg = json.loads(message)
+        except Exception:
+            return
+
+        t = msg.get("type")
+        text = msg.get("text", "")
+
+        if t == "partial":
+            if text.strip():
+                Display.partial(text)
+
+        elif t == "final":
+            if text.strip():
+                Display.you(text)
+
+        elif t == "tts_start":
+            # Server started speaking — mute mic to prevent echo.
+            # FIX: _server_tts_active is now properly initialised above.
+            self._server_tts_active.set()
+
+        elif t == "tts_done":
+            # Server finished speaking — unmute mic.
+            self._server_tts_active.clear()
+
+        elif t == "llm_start":
+            # FIX: only resume client TTS when in client-TTS mode.
+            if ENABLE_TTS and TTS_MODE == "client":
+                self._tts.resume()
+            Display.ai_start()
+
+        elif t == "llm_token":
+            Display.ai_token(text)
+            # FIX: only feed tokens to the local player in client-TTS mode.
+            if ENABLE_TTS and TTS_MODE == "client":
+                self._tts.feed_token(text)
+
+        elif t == "llm_done":
+            # FIX: only flush local player in client-TTS mode.
+            if ENABLE_TTS and TTS_MODE == "client":
+                self._tts.flush()
+            Display.ai_done()
+
+        elif t == "error":
+            Display.error(msg.get("message", "unknown error"))
+
+    def _on_error(self, ws, error):
+        Display.error(f"WS error: {error}")
+
+    def _on_close(self, ws, code, msg):
+        self._connected.clear()
+        self._server_tts_active.clear()
+        Display.info(f"WebSocket disconnected (code={code})")
+
+    def _sender_loop(self):
+        while self._running or not self._send_q.empty():
+            try:
+                item = self._send_q.get(timeout=0.1)
+            except queue.Empty:
+                continue
+            try:
+                if isinstance(item, bytes):
+                    self._ws.send(item, opcode=websocket.ABNF.OPCODE_BINARY)
+                else:
+                    self._ws.send(item)
+            except Exception as e:
+                Display.error(f"Send failed: {e}")
+                break
+
+
+# ── Recording session ─────────────────────────────────────────────────────────
+
+
+def run_session(client: StreamingVoiceClient) -> None:
+    if not ENABLE_STT:
+        Display.info("STT is disabled (ENABLE_STT=False). Voice input unavailable.")
+        return
+
+    vad = SmartVAD(
+        on_chunk=client.send_audio,
+        on_speech_start=client.on_user_speech_start,
+        on_speech_end=client.send_end_of_speech,
+    )
+
+    def audio_callback(indata, frames, time_info, status):
+        vad.process(indata.copy())
+
+    stream = sd.InputStream(
+        samplerate=RECORD_SAMPLE_RATE,
+        channels=1,
+        dtype="float32",
+        callback=audio_callback,
+        blocksize=int(RECORD_SAMPLE_RATE * CHUNK_MS / 1000),
+    )
+
+    stream.start()
+    Display.info("🔴  Listening... speak naturally. Press ENTER to stop.")
+    input()
+    stream.stop()
+    stream.close()
+    vad.flush()
+
+
+# ── Command loop ──────────────────────────────────────────────────────────────
+
+
+def command_loop(client: StreamingVoiceClient) -> None:
+    print()
+    if ENABLE_STT:
+        print(
+            "  Commands:  ENTER = start listening  |  'clear' = reset memory  |  'quit' = exit"
+        )
+    else:
+        print("  Commands:  'clear' = reset memory  |  'quit' = exit")
+        print("  (Voice input disabled — ENABLE_STT=False)")
+    print()
+
+    while True:
+        try:
+            prompt = (
+                "  [ ENTER to listen, or command ] " if ENABLE_STT else "  [ command ] "
+            )
+            cmd = input(prompt).strip().lower()
+        except (EOFError, KeyboardInterrupt):
+            break
+
+        if cmd in ("quit", "q"):
+            break
+        elif cmd == "clear":
+            client.send_clear_history()
+            Display.info("Conversation history cleared.")
+        elif cmd == "" and ENABLE_STT:
+            print()
+            run_session(client)
+            print()
+        elif cmd == "" and not ENABLE_STT:
+            pass  # ignore bare Enter when STT is off
+        else:
+            Display.info(f"Unknown: '{cmd}'  (clear / quit / ENTER)")
+
+    client.disconnect()
+    print("\n  Bye!")
+
+
+# ── Health check ──────────────────────────────────────────────────────────────
+
+
+def check_server() -> None:
+    import requests as req
+
+    try:
+        r = req.get(SERVER_HTTP, timeout=5)
+        d = r.json()
+        print(
+            f"  Server OK  |  Whisper: {d['whisper_model']}  |  LLM loaded: {d.get('llm_loaded', '?')}"
+        )
+    except Exception as e:
+        print(f"  Cannot reach server at {SERVER_HTTP}: {e}")
+        sys.exit(1)
+
+
+# ── Entry point ───────────────────────────────────────────────────────────────
+
+
+def main() -> None:
+    print("\n" + "=" * 54)
+    stt_label = "STT" if ENABLE_STT else "STT:off"
+    tts_label = "TTS" if ENABLE_TTS else "TTS:off"
+    print(f"    REAL-TIME VOICE AI  ({stt_label} + LLM + {tts_label})")
+    print("=" * 54)
+    check_server()
+
+    client = StreamingVoiceClient()
+    print("  Connecting WebSocket ...", end="", flush=True)
+    if not client.connect():
+        print(" FAILED — is the server running?")
+        sys.exit(1)
+    print(" OK\n")
+
+    print("  Legend:")
+    print(
+        "  \033[90m... partial\033[0m  |  \033[94mYOU: transcript\033[0m  |  \033[92mAI : response\033[0m"
+    )
+
+    command_loop(client)
+
+
+if __name__ == "__main__":
+    main()
+
+### config.py
+"""
+config.py  —  single source of truth for all tunable values.
+"""
+
+import os
+import torch
+from pathlib import Path
+
+# ── Paths ──────────────────────────────────────────────────────────────────────
+BASE_DIR = Path(__file__).parent
+MODELS_DIR = BASE_DIR / "models"
+WHISPER_DIR = MODELS_DIR / "whisper"
+
+# ── Whisper ────────────────────────────────────────────────────────────────────
+WHISPER_MODEL_NAME = "base"
+WHISPER_MODEL_PATH = WHISPER_DIR / f"{WHISPER_MODEL_NAME}.pt"
+
+if torch.cuda.is_available():
+    WHISPER_DEVICE = "cuda"
+elif torch.backends.mps.is_available():
+    WHISPER_DEVICE = "mps"
+else:
+    WHISPER_DEVICE = "cpu"
+
+print(f"[Config] Using device: {WHISPER_DEVICE}")
+
+# ── LLM ────────────────────────────────────────────────────────────────────────
+ACTIVE_LLM_MODEL = "qwen2.5-3b"
+GPU_LAYERS = 36  # -1 = all layers on Metal GPU
+CONTEXT_SIZE = 2048
+CPU_THREADS = max(1, os.cpu_count() // 2)
+
+# ── Server ─────────────────────────────────────────────────────────────────────
+SERVER_PORT = 5001
+
+# ── Voice / LLM prompt ────────────────────────────────────────────────────────
+VOICE_SYSTEM_PROMPT = (
+    "You are a helpful voice assistant. "
+    "Keep responses short and conversational, 1-3 sentences max."
+)
+VOICE_MAX_TOKENS = 150
+VOICE_TEMPERATURE = 0.7
+
+# ── Audio ──────────────────────────────────────────────────────────────────────
+RECORD_SAMPLE_RATE = 44100
+WHISPER_SAMPLE_RATE = 16000
+
+# ── VAD ────────────────────────────────────────────────────────────────────────
+SILENCE_THRESHOLD = 0.035  # was 0.008
+SILENCE_DURATION = 1.8  # was 0.5
+MIN_SPEECH = 0.8  # was 0.3
+ROLLING_WINDOW_SEC = 8.0
+
+# ── Feature toggles ───────────────────────────────────────────────────────────
+# ENABLE_STT : True  → mic captured, sent to server, Whisper runs normally.
+#              False → voice input disabled; server skips loading Whisper.
+ENABLE_STT = True
+
+# ENABLE_TTS : True  → AI responses are spoken aloud.
+#              False → text-only; no TTS engine created anywhere.
+ENABLE_TTS = True
+
+# ── Output mode ───────────────────────────────────────────────────────────────
+# SHOW_TEXT : True  → response text is streamed to the client terminal.
+SHOW_TEXT = True
+
+# ── TTS mode ──────────────────────────────────────────────────────────────────
+# TTS_MODE (only relevant when ENABLE_TTS = True):
+#   "server" → server speaks through its own speakers.
+#   "client" → client receives llm_token stream and speaks locally.
+TTS_MODE = "server"
+TTS_SERVER_BACKEND = "supertonic2"  # "supertonic2" or "vibevoice"
+# ── TTS backend ───────────────────────────────────────────────────────────────
+# Supertonic 2 ONNX is used for all TTS (server and client).
+# Requires: pip install onnxruntime transformers huggingface_hub sounddevice soundfile
+
+# Voice presets : M1 M2 M3 M4 M5  F1 F2 F3 F4 F5
+# Languages     : en  ko  es  pt  fr
+SUPERTONIC_VOICE = "F1"  # voice preset
+SUPERTONIC_LANGUAGE = "en"  # language tag
+SUPERTONIC_STEPS = 15  # denoising steps — more = higher quality (max 50)
+SUPERTONIC_SPEED = 1.2  # 0.5 = slow · 1.0 = normal · 1.3 = fast
+
+
+# voice_client---------------------------
+
+# ENERGY_THRESHOLD = 0.015  # too low, picks up breath/hum/keyboard
+# MIN_SPEECH_SEC   = 0.4    # too short, sends noise bursts to Whisper
+# PAUSE_SECONDS    = 1.5    # slightly short, cuts off trailing words
+
+ENERGY_THRESHOLD = 0.015
+MIN_SPEECH_SEC = 0.4
+PAUSE_SECONDS = 1.5
+
+
+# streaming_transcriber---------------------------
+
+MIN_AUDIO_SEC = 0.4  # too short — Whisper hallucinates on short clips
+NO_SPEECH_THRESHOLD = 0.6  # too lenient — still passes borderline audio
+LOGPROB_THRESHOLD = -1.0  # default, not helping at all
+TRANSCRIBE_EVERY = 0.6  # partials fire too fast, wastes Whisper cycles
+
+
+# ===================== STT / VAD TUNING PARAMETERS =====================
+#
+# Parameter              | Old Value | New Value | Purpose
+# ------------------------------------------------------------------------
+# ENERGY_THRESHOLD       | 0.015     | 0.035     | Stops VAD triggering on background noise
+# MIN_SPEECH_SEC         | 0.4       | 0.8       | Stops tiny noise bursts reaching Whisper
+# PAUSE_SECONDS          | 1.5       | 1.8       | Prevents cutting off trailing words
+# NO_SPEECH_THRESHOLD    | 0.6       | 0.45      | Stricter silence rejection
+# logprob_threshold      | -1.0      | -0.5      | Rejects low-confidence guessed tokens
+# MIN_AUDIO_SEC          | 0.4       | 0.8       | Rejects short clips (aligned with VAD)
+# RMS gate (_get_audio)  | N/A       | Enabled   | Final defense before Whisper sees audio
+# TRANSCRIBE_EVERY       | 0.6       | 1.0       | Fewer partial passes → less hallucination surface
+#
+# ====================================see it might need to change back====================================
+
+### llm/llm_engine.py
+"""
+llm/llm_engine.py
+
+Loads a GGUF model via llama-cpp-python and exposes a streaming generator.
+Singleton — model is loaded once on first call.
+
+Usage:
+    from llm.llm_engine import stream_response
+
+    for token in stream_response("Hello, who are you?"):
+        print(token, end="", flush=True)
+"""
+
+import threading
+import glob
+from pathlib import Path
+from typing import Generator, Optional
+
+from llama_cpp import Llama
+
+from config import (
+    MODELS_DIR,
+    ACTIVE_LLM_MODEL,
+    GPU_LAYERS,
+    CONTEXT_SIZE,
+    CPU_THREADS,
+    VOICE_SYSTEM_PROMPT,
+    VOICE_MAX_TOKENS,
+    VOICE_TEMPERATURE,
+)
+
+# ── Model path resolution ──────────────────────────────────────────────────────
+
+
+def _find_model_path() -> str:
+    """
+    Find the GGUF file inside models/<ACTIVE_LLM_MODEL>/.
+    Prefers quantized variants in this order: Q4_K_M, Q4, Q5, Q8, fallback first found.
+    """
+    model_dir = MODELS_DIR / ACTIVE_LLM_MODEL
+    if not model_dir.exists():
+        raise FileNotFoundError(f"Model directory not found: {model_dir}")
+
+    gguf_files = sorted(model_dir.glob("*.gguf"))
+    if not gguf_files:
+        raise FileNotFoundError(f"No .gguf files found in {model_dir}")
+
+    # Prefer common good-quality quants
+    preference = ["Q4_K_M", "Q4_K_S", "Q4", "Q5_K_M", "Q5", "Q8", "q4", "q5", "q8"]
+    for pref in preference:
+        for f in gguf_files:
+            if pref.lower() in f.name.lower():
+                return str(f)
+
+    return str(gguf_files[0])  # fallback: first found
+
+
+# ── Singleton ─────────────────────────────────────────────────────────────────
+
+_model: Optional[Llama] = None
+_lock = threading.Lock()
+_model_path: Optional[str] = None
+
+
+def get_llm() -> Llama:
+    global _model, _model_path
+    if _model is not None:
+        return _model
+
+    with _lock:
+        if _model is not None:
+            return _model
+
+        path = _find_model_path()
+        _model_path = path
+        print(f"[LLM] Loading model from: {path}")
+        print(
+            f"[LLM] GPU layers: {GPU_LAYERS} | Context: {CONTEXT_SIZE} | Threads: {CPU_THREADS}"
+        )
+
+        _model = Llama(
+            model_path=path,
+            n_gpu_layers=GPU_LAYERS,
+            n_ctx=CONTEXT_SIZE,
+            n_threads=CPU_THREADS,
+            verbose=False,
+        )
+        print("[LLM] Model ready.")
+
+    return _model
+
+
+def is_loaded() -> bool:
+    return _model is not None
+
+
+def get_model_path() -> Optional[str]:
+    return _model_path
+
+
+# ── Conversation history ───────────────────────────────────────────────────────
+
+
+class ConversationHistory:
+    """Simple rolling conversation history with token budget."""
+
+    def __init__(self, max_turns: int = 10):
+        self.max_turns = max_turns
+        self._history: list[dict] = []
+
+    def add_user(self, text: str):
+        self._history.append({"role": "user", "content": text})
+        self._trim()
+
+    def add_assistant(self, text: str):
+        self._history.append({"role": "assistant", "content": text})
+        self._trim()
+
+    def get_messages(self) -> list[dict]:
+        return [{"role": "system", "content": VOICE_SYSTEM_PROMPT}] + self._history
+
+    def clear(self):
+        self._history = []
+
+    def _trim(self):
+        # Keep last max_turns * 2 messages (user+assistant pairs)
+        if len(self._history) > self.max_turns * 2:
+            self._history = self._history[-(self.max_turns * 2) :]
+
+
+# ── Streaming inference ────────────────────────────────────────────────────────
+
+
+def stream_response(
+    user_text: str,
+    history: Optional[ConversationHistory] = None,
+) -> Generator[str, None, str]:
+    """
+    Yields tokens one by one as the LLM generates them.
+    Adds the exchange to history if provided.
+    Returns the full response text when exhausted.
+
+    Usage:
+        full = ""
+        for token in stream_response("Hi!", history):
+            print(token, end="", flush=True)
+            full += token
+    """
+    llm = get_llm()
+
+    if history:
+        history.add_user(user_text)
+        messages = history.get_messages()
+    else:
+        messages = [
+            {"role": "system", "content": VOICE_SYSTEM_PROMPT},
+            {"role": "user", "content": user_text},
+        ]
+
+    full_response = ""
+
+    try:
+        stream = llm.create_chat_completion(
+            messages=messages,
+            max_tokens=VOICE_MAX_TOKENS,
+            temperature=VOICE_TEMPERATURE,
+            stream=True,
+        )
+
+        for chunk in stream:
+            delta = chunk["choices"][0]["delta"]
+            token = delta.get("content", "")
+            if token:
+                full_response += token
+                yield token
+
+    except Exception as e:
+        error_msg = f"[LLM error: {e}]"
+        yield error_msg
+        full_response = error_msg
+
+    if history and full_response:
+        history.add_assistant(full_response)
+
+    return full_response
+
+### main.py
+"""
+main.py
+Server entry point.  Run:  python main.py
+"""
+
+from config import SERVER_PORT
+from server import create_app
+from transcription.whisper_loader import get_model
+
+if __name__ == "__main__":
+    print("=" * 50)
+    print("  VOICE AI SERVER")
+    print("=" * 50)
+    print(f"POST http://localhost:{SERVER_PORT}/transcribe")
+    print(f"GET  http://localhost:{SERVER_PORT}/health")
+    print("=" * 50)
+
+    # Pre-warm Whisper so the first request is instant
+    try:
+        get_model()
+    except Exception as e:
+        print(f"WARNING: Could not pre-load Whisper: {e}")
+
+    app = create_app()
+    app.run(host="0.0.0.0", port=SERVER_PORT, debug=False, threaded=True)
+
+### requirements.txt
+# Voice Server dependencies
+flask
+flask-cors
+torch
+openai-whisper
+gTTS
+
+# llama-cpp-python
+
+# CMAKE_ARGS="-DLLAMA_METAL=on" pip install llama-cpp-python --no-cache-dir
+
+Pillow
+requests
+numpy
+resampy
+soundfile
+
+# Voice Client dependencies
+sounddevice
+pygame
+flask-sock 
+websocket-client
+pyttsx3 
+sounddevice
+onnxruntime 
+transformers
+
+### server_tts/__init__.py
+# server_tts package
+
+### server_tts/tts_engine.py
+"""
+server_tts/tts_engine.py
+
+Server-side TTS using Supertonic 2 ONNX.
+
+Public API:
+    ServerTTSEngine(voice, speed, steps, language)
+    .speak_filler()
+    .feed_token(token)
+    .flush()
+    .interrupt()
+    .resume()
+    .is_speaking() → bool
+    .wait_until_done(timeout)
+    .shutdown()
+"""
+
+import re
+import threading
+import queue
+import random
+import time
+
+# ── Text helpers ──────────────────────────────────────────────────────────────
+
+_SENTENCE_END = re.compile(r"(?<![A-Z][a-z])(?<!\d)([.?!])(\s+|$)")
+_CLAUSE_BREAK = re.compile(r"[,;:]\s+")
+
+MIN_CHUNK_CHARS = 6
+MERGE_WINDOW_SEC = 0.05
+
+
+def _split_sentence(buf: str) -> tuple[str, str]:
+    m = _SENTENCE_END.search(buf)
+    if m:
+        return buf[: m.end()].strip(), buf[m.end() :]
+    m = _CLAUSE_BREAK.search(buf)
+    if m and m.start() >= MIN_CHUNK_CHARS:
+        return buf[: m.start()].strip(), buf[m.end() :]
+    return "", buf
+
+
+def _clean_text(text: str) -> str:
+    text = re.sub(r"\*+", "", text)
+    text = re.sub(r"_+", "", text)
+    text = re.sub(r"`+", "", text)
+    text = re.sub(r"\s+", " ", text)
+    return text.strip()
+
+
+# ── Filler phrases ────────────────────────────────────────────────────────────
+
+_FILLERS = [
+    "Mm-hmm.",
+    "Sure.",
+    "Okay.",
+    "Right.",
+    "Mm.",
+    "Yeah.",
+    "I see.",
+    "Got it.",
+    "Ah.",
+    "Sure thing.",
+]
+
+
+# ── Priority queue item ───────────────────────────────────────────────────────
+
+
+class _Item:
+    """priority=0 → filler (plays first), priority=1 → normal LLM sentence."""
+
+    __slots__ = ("priority", "text")
+
+    def __init__(self, text: str, priority: int = 1):
+        self.priority = priority
+        self.text = text
+
+    def __lt__(self, other: "_Item") -> bool:
+        return self.priority < other.priority
+
+
+# ── Engine ────────────────────────────────────────────────────────────────────
+
+
+class ServerTTSEngine:
+    def __init__(
+        self,
+        voice: str = "F1",
+        speed: float = 1.0,
+        steps: int = 5,
+        language: str = "en",
+    ):
+        self._voice = voice
+        self._speed = speed
+        self._steps = steps
+        self._language = language
+        self._model = None  # loaded lazily in worker thread
+
+        self._token_buf = ""
+        self._queue = queue.PriorityQueue()
+        self._interrupted = threading.Event()
+        self._speaking = threading.Event()
+
+        self._worker = threading.Thread(target=self._loop, daemon=True)
+        self._worker.start()
+
+    # ── Public API ────────────────────────────────────────────────────────────
+
+    def speak_filler(self) -> None:
+        self._queue.put(_Item(random.choice(_FILLERS), priority=0))
+
+    def feed_token(self, token: str) -> None:
+        if self._interrupted.is_set():
+            return
+        self._token_buf += token
+        while True:
+            sentence, remainder = _split_sentence(self._token_buf)
+            if sentence and len(sentence) >= MIN_CHUNK_CHARS:
+                self._token_buf = remainder
+                self._queue.put(_Item(sentence, priority=1))
+            else:
+                break
+        if len(self._token_buf.split()) >= 8:
+            text = self._token_buf.strip()
+            self._token_buf = ""
+            if text:
+                self._queue.put(_Item(text, priority=1))
+
+    def flush(self) -> None:
+        text = self._token_buf.strip()
+        self._token_buf = ""
+        if text and len(text) >= 2:
+            self._queue.put(_Item(text, priority=1))
+
+    def interrupt(self) -> None:
+        self._interrupted.set()
+        while not self._queue.empty():
+            try:
+                self._queue.get_nowait()
+            except queue.Empty:
+                break
+        from tts.supertonic_model import stop_audio
+
+        stop_audio()
+
+    def resume(self) -> None:
+        self._token_buf = ""
+        self._interrupted.clear()
+
+    def is_speaking(self) -> bool:
+        return self._speaking.is_set()
+
+    def wait_until_done(self, timeout: float = 2.0) -> None:
+        deadline = time.time() + timeout
+        time.sleep(0.05)
+        while self.is_speaking() and time.time() < deadline:
+            time.sleep(0.02)
+
+    def shutdown(self) -> None:
+        self.interrupt()
+        self._queue.put(None)
+        self._worker.join(timeout=3)
+
+    # ── Worker ────────────────────────────────────────────────────────────────
+
+    def _ensure_model(self):
+        if self._model is None:
+            from tts.supertonic_model import get_model
+
+            self._model = get_model()
+            print(
+                f"[ServerTTS] Ready — voice={self._voice}, lang={self._language}, steps={self._steps}"
+            )
+
+    def _loop(self) -> None:
+        self._ensure_model()
+
+        while True:
+            item = self._queue.get()
+            if item is None:
+                break
+            if self._interrupted.is_set():
+                continue
+
+            collected = [item]
+            if item.priority > 0:
+                deadline = time.time() + MERGE_WINDOW_SEC
+                while time.time() < deadline:
+                    try:
+                        nxt = self._queue.get_nowait()
+                        if nxt is None:
+                            self._queue.put(None)
+                            break
+                        if nxt.priority == 0:
+                            self._queue.put(nxt)
+                            break
+                        collected.append(nxt)
+                    except queue.Empty:
+                        time.sleep(0.005)
+
+            if self._interrupted.is_set():
+                continue
+
+            merged = " ".join(_clean_text(c.text) for c in collected if c.text.strip())
+            if not merged:
+                continue
+
+            self._speaking.set()
+            try:
+                from tts.supertonic_model import play_audio
+
+                audio = self._model.generate_one(
+                    merged,
+                    voice=self._voice,
+                    speed=self._speed,
+                    steps=self._steps,
+                    language=self._language,
+                )
+                play_audio(audio, self._model.SAMPLE_RATE)
+            except Exception as e:
+                print(f"[ServerTTS] Error: {e}")
+            finally:
+                self._speaking.clear()
+
+### server.py
+"""
+server.py — Flask app + all routes.
+
+WebSocket protocol
+──────────────────
+Client → Server (binary):  raw float32 LE audio at 16 kHz
+Client → Server (JSON):
+    {"type": "end_of_speech"}
+    {"type": "ping"}
+    {"type": "clear_history"}
+
+Server → Client (JSON):
+    {"type": "partial",      "text": "..."}   ← only when ENABLE_STT=True
+    {"type": "final",        "text": "..."}   ← only when ENABLE_STT=True
+    {"type": "llm_start"}
+    {"type": "llm_token",    "text": "..."}
+    {"type": "llm_done",     "text": "..."}
+    {"type": "tts_start"}                     ← only when ENABLE_TTS=True, TTS_MODE="server"
+    {"type": "tts_done"}                      ← only when ENABLE_TTS=True, TTS_MODE="server"
+    {"type": "pong"}
+    {"type": "error",        "message": "..."}
+"""
+
+import os, json, time, tempfile, threading
+from datetime import datetime
+from pathlib import Path
+import numpy as np
+
+from flask import Flask, request, jsonify
+from flask_cors import CORS
+from flask_sock import Sock
+
+from config import (
+    WHISPER_MODEL_NAME,
+    WHISPER_SAMPLE_RATE,
+    BASE_DIR,
+    ENABLE_STT,
+    ENABLE_TTS,
+    TTS_MODE,
+    SUPERTONIC_VOICE,
+    SUPERTONIC_LANGUAGE,
+    SUPERTONIC_STEPS,
+    SUPERTONIC_SPEED,
+    SHOW_TEXT,
+)
+from audio.audio_utils import load_audio_as_array
+from transcription.whisper_loader import (
+    get_model as get_whisper,
+    is_loaded as whisper_loaded,
+)
+from transcription.transcriber import transcribe_audio
+from transcription.streaming_transcriber import StreamingTranscriber
+from llm.llm_engine import (
+    get_llm,
+    stream_response,
+    ConversationHistory,
+    is_loaded as llm_loaded,
+)
+
+if ENABLE_TTS and TTS_MODE == "server":
+    from server_tts.tts_engine import ServerTTSEngine
+
+_SILENCE_THRESHOLD = 0.008
+_SILENCE_DURATION = 1.2
+
+# ── Conversation logger ───────────────────────────────────────────────────────
+
+LOGS_DIR = BASE_DIR / "logs"
+LOGS_DIR.mkdir(exist_ok=True)
+from config import *
+
+
+class ConversationLogger:
+    def __init__(self):
+        ts = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+        self._path = LOGS_DIR / f"conversation_{ts}.log"
+        self._req_num = 0
+        self._lock = threading.Lock()
+        self._session_start = time.time()
+
+        with open(self._path, "w") as f:
+            f.write("╔══════════════════════════════════════════════════════╗\n")
+            f.write(
+                f"  Session started: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n"
+            )
+            f.write("╚══════════════════════════════════════════════════════╝\n\n")
+
+        print(f"[LOG] Logging to: {self._path}")
+
+    def log_request(
+        self,
+        user_text: str,
+        ai_response: str,
+        whisper_latency: float,
+        llm_first_token: float,
+        llm_total: float,
+        end_to_end: float,
+    ) -> None:
+        with self._lock:
+            self._req_num += 1
+            num = self._req_num
+            ts = datetime.now().strftime("%H:%M:%S")
+            session_t = time.time() - self._session_start
+
+            sep = "─" * 54
+            print(f"\n  {sep}")
+            print(f"  Request #{num:02d}  [{ts}]  (session +{session_t:.0f}s)")
+            print(f"  {sep}")
+            print(f"  YOU : {user_text}")
+            print(f"  AI  : {ai_response}")
+            print(f"  {sep}")
+            print(f"  ⏱  Whisper     : {whisper_latency:.3f}s")
+            print(f"  ⏱  First token : {llm_first_token:.3f}s")
+            print(f"  ⏱  LLM total   : {llm_total:.3f}s")
+            print(f"  ⏱  End-to-end  : {end_to_end:.3f}s  │  {len(ai_response)} chars")
+            print(f"  {sep}\n")
+
+            with open(self._path, "a") as f:
+                f.write(f"[{ts}] Request #{num:02d}\n")
+                f.write(f"  YOU : {user_text}\n")
+                f.write(f"  AI  : {ai_response}\n")
+                f.write(f"  TIMERS → whisper:{whisper_latency:.3f}s  ")
+                f.write(f"first_token:{llm_first_token:.3f}s  ")
+                f.write(f"llm_total:{llm_total:.3f}s  ")
+                f.write(f"end_to_end:{end_to_end:.3f}s  ")
+                f.write(f"chars:{len(ai_response)}\n\n")
+
+    def log_event(self, event: str) -> None:
+        ts = datetime.now().strftime("%H:%M:%S")
+        with self._lock:
+            print(f"  [LOG] {event}")
+            with open(self._path, "a") as f:
+                f.write(f"[{ts}] EVENT: {event}\n\n")
+
+    def close(self) -> None:
+        duration = time.time() - self._session_start
+        with open(self._path, "a") as f:
+            f.write("╔══════════════════════════════════════════════════════╗\n")
+            f.write(f"  Session ended: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+            f.write(f"  (duration: {duration:.0f}s, {self._req_num} requests)\n")
+            f.write("╚══════════════════════════════════════════════════════╝\n")
+        print(
+            f"[LOG] Session closed — {self._req_num} requests in {duration:.0f}s → {self._path}"
+        )
+
+
+# ── App factory ───────────────────────────────────────────────────────────────
+
+
+def create_app() -> Flask:
+    app = Flask(__name__)
+    sock = Sock(app)
+    CORS(app)
+
+    @app.route("/health", methods=["GET"])
+    def health():
+        return jsonify(
+            {
+                "status": "ok",
+                "whisper_loaded": whisper_loaded(),
+                "whisper_model": WHISPER_MODEL_NAME,
+                "llm_loaded": llm_loaded(),
+                "enable_stt": ENABLE_STT,
+                "enable_tts": ENABLE_TTS,
+                "tts_mode": TTS_MODE,
+                "tts_backend": TTS_SERVER_BACKEND if TTS_MODE == "server" else "n/a",
+            }
+        )
+
+    @app.route("/transcribe", methods=["POST"])
+    def transcribe():
+        if not ENABLE_STT:
+            return jsonify({"error": "STT is disabled on this server"}), 503
+        if "file" not in request.files:
+            return jsonify({"error": "No file provided"}), 400
+        f = request.files["file"]
+        tmp = os.path.join(tempfile.gettempdir(), f"stt_{int(time.time()*1000)}.wav")
+        f.save(tmp)
+        try:
+            get_whisper()
+            audio = load_audio_as_array(tmp)
+            text = transcribe_audio(audio)
+            return jsonify({"text": text})
+        except Exception as e:
+            import traceback
+
+            traceback.print_exc()
+            return jsonify({"error": str(e)}), 500
+        finally:
+            try:
+                os.unlink(tmp)
+            except Exception:
+                pass
+
+    @sock.route("/ws/transcribe")
+    def ws_transcribe(ws):
+        logger = ConversationLogger()
+        logger.log_event("Client connected")
+
+        if ENABLE_STT:
+            get_whisper()
+        get_llm()
+
+        history = ConversationHistory(max_turns=10)
+        silence_samples_need = int(_SILENCE_DURATION * WHISPER_SAMPLE_RATE)
+        silence_accumulated = 0
+        in_speech = False
+        _eos_lock = threading.Lock()
+
+        def send(obj: dict):
+            try:
+                ws.send(json.dumps(obj))
+            except Exception:
+                pass
+
+        # ── Server TTS engine ─────────────────────────────────────────────
+        server_tts = None
+        if ENABLE_TTS and TTS_MODE == "server":
+            server_tts = ServerTTSEngine(
+                voice=SUPERTONIC_VOICE,
+                speed=SUPERTONIC_SPEED,
+                steps=SUPERTONIC_STEPS,
+                language=SUPERTONIC_LANGUAGE,
+            )
+
+        def run_llm(user_text: str, t_eos: float):
+            if not user_text.strip():
+                return
+
+            t_llm_start = time.time()
+            whisper_lat = t_llm_start - t_eos
+            first_token_t = None
+
+            if SHOW_TEXT:
+                send({"type": "llm_start"})
+
+            if server_tts:
+                send({"type": "tts_start"})
+
+            full = ""
+            first_token = True
+
+            try:
+                for token in stream_response(user_text, history):
+                    if first_token:
+                        first_token_t = time.time() - t_llm_start
+                        first_token = False
+                    full += token
+                    if SHOW_TEXT:
+                        send({"type": "llm_token", "text": token})
+                    if server_tts:
+                        server_tts.feed_token(token)
+            finally:
+                if server_tts:
+                    server_tts.flush()
+
+                t_done = time.time()
+                llm_total = t_done - t_llm_start
+                e2e = t_done - t_eos
+
+                logger.log_request(
+                    user_text=user_text,
+                    ai_response=full,
+                    whisper_latency=whisper_lat,
+                    llm_first_token=first_token_t or llm_total,
+                    llm_total=llm_total,
+                    end_to_end=e2e,
+                )
+                if SHOW_TEXT:
+                    send({"type": "llm_done", "text": full})
+                if server_tts:
+                    send({"type": "tts_done"})
+
+        def trigger_eos(force: bool = False):
+            nonlocal silence_accumulated, in_speech
+            if not force and server_tts and server_tts.is_speaking():
+                silence_accumulated = 0
+                in_speech = False
+                transcriber.clear()
+                return
+            if not _eos_lock.acquire(blocking=False):
+                return
+            try:
+                t_eos = time.time()
+                silence_accumulated = 0
+                in_speech = False
+                if server_tts:
+                    server_tts.interrupt()
+                text = transcriber.end_of_speech()
+                if text and text.strip():
+                    if SHOW_TEXT:
+                        send({"type": "final", "text": text})
+                    if server_tts:
+                        server_tts.resume()  # clear flag FIRST
+                        server_tts.speak_filler()  # then enqueue filler
+                    threading.Thread(
+                        target=run_llm, args=(text, t_eos), daemon=True
+                    ).start()
+            finally:
+                _eos_lock.release()
+
+        def on_partial(text: str):
+            if SHOW_TEXT:
+                send({"type": "partial", "text": text})
+
+        def on_final(text: str):
+            pass
+
+        transcriber = None
+        if ENABLE_STT:
+            transcriber = StreamingTranscriber(
+                on_partial=on_partial,
+                on_final=on_final,
+                sample_rate=WHISPER_SAMPLE_RATE,
+            )
+            transcriber.start()
+
+        try:
+            while True:
+                message = ws.receive()
+                if message is None:
+                    break
+
+                if isinstance(message, str):
+                    try:
+                        msg = json.loads(message)
+                    except json.JSONDecodeError:
+                        continue
+
+                    mtype = msg.get("type")
+                    if mtype == "end_of_speech":
+                        if ENABLE_STT and transcriber:
+                            trigger_eos()
+                    elif mtype == "clear_history":
+                        history.clear()
+                        logger.log_event("Conversation history cleared")
+                        send({"type": "pong"})
+                    elif mtype == "ping":
+                        send({"type": "pong"})
+                    continue
+
+                if isinstance(message, bytes) and len(message) >= 4:
+                    if not ENABLE_STT or transcriber is None:
+                        continue
+                    if server_tts and server_tts.is_speaking():
+                        silence_accumulated = 0
+                        in_speech = False
+                        continue
+                    chunk = np.frombuffer(message, dtype=np.float32)
+                    transcriber.feed(chunk)
+
+                    amp = float(np.abs(chunk).mean())
+                    if amp > _SILENCE_THRESHOLD:
+                        in_speech = True
+                        silence_accumulated = 0
+                    elif in_speech:
+                        silence_accumulated += len(chunk)
+                        if silence_accumulated >= silence_samples_need:
+                            trigger_eos()
+
+        except Exception as e:
+            print(f"[WS] Error: {e}")
+            send({"type": "error", "message": str(e)})
+        finally:
+            if transcriber:
+                transcriber.stop()
+            if server_tts:
+                server_tts.shutdown()
+            logger.log_event("Client disconnected")
+            logger.close()
+
+    return app
+
+### transcription/streaming_transcriber.py
+"""
+transcription/streaming_transcriber.py
+
+Rolling-buffer streaming transcriber with hallucination suppression.
+
+Hallucination fixes:
+  1. no_speech_prob threshold  — Whisper's own confidence score; discard if too low
+  2. compression_ratio check   — repeated text compresses heavily; discard if too high
+  3. Repetition detector       — if the same phrase appears N+ times, it's a loop
+  4. Compression ratio from whisper result — use built-in flag
+"""
+
+import re
+import threading
+import time
+from typing import Callable, Optional
+
+import numpy as np
+import whisper
+
+
+from config import (
+    WHISPER_DEVICE,
+    MIN_AUDIO_SEC,
+    NO_SPEECH_THRESHOLD,
+    LOGPROB_THRESHOLD,
+    TRANSCRIBE_EVERY,
+)
+
+from transcription.whisper_loader import get_model
+
+# ── Tuning constants ──────────────────────────────────────────────────────────
+MAX_BUFFER_SEC = 29.0  # Whisper hard limit
+# TRANSCRIBE_EVERY = 0.6  # seconds between partial passes
+# MIN_AUDIO_SEC = 0.4  # skip transcription for very short clips
+
+# NO_SPEECH_THRESHOLD = 0.6  # discard if Whisper says >60% chance no speech
+COMPRESSION_RATIO_THRESHOLD = 2.0  # discard if text is suspiciously repetitive
+REPETITION_MIN_WORDS = 4  # phrase length to check for repetition
+REPETITION_COUNT_THRESHOLD = 3  # how many times a phrase must repeat to be flagged
+
+_infer_lock = threading.Lock()
+
+
+# ── Hallucination detection ───────────────────────────────────────────────────
+
+
+def _has_repetition(text: str) -> bool:
+    """
+    Returns True if the same N-word phrase repeats 3+ times.
+    Catches Whisper's looping behaviour like:
+      "I'm going to go to the bathroom. I'm going to go to the bathroom. ..."
+    """
+    words = text.lower().split()
+    n = REPETITION_MIN_WORDS
+
+    if len(words) < n * REPETITION_COUNT_THRESHOLD:
+        return False
+
+    for start in range(len(words) - n + 1):
+        phrase = tuple(words[start : start + n])
+        count = 0
+        pos = start
+        while pos <= len(words) - n:
+            if tuple(words[pos : pos + n]) == phrase:
+                count += 1
+                pos += n
+            else:
+                pos += 1
+        if count >= REPETITION_COUNT_THRESHOLD:
+            return True
+
+    return False
+
+
+def _clean_text(text: str) -> str:
+    """Strip leading/trailing whitespace and remove filler-only results."""
+    text = text.strip()
+    # Whisper sometimes returns just '[BLANK_AUDIO]' or '[ Silence ]' etc.
+    if re.match(r"^\[.*\]$", text):
+        return ""
+    return text
+
+
+# ── Streaming transcriber ─────────────────────────────────────────────────────
+
+
+class StreamingTranscriber:
+    """
+    Feed raw 16 kHz float32 audio via feed().
+    Fires on_partial(text) every ~TRANSCRIBE_EVERY seconds.
+    Fires on_final(text)   when end_of_speech() is called.
+    """
+
+    def __init__(
+        self,
+        on_partial: Callable[[str], None],
+        on_final: Callable[[str], None],
+        sample_rate: int = 16000,
+    ):
+        self.on_partial = on_partial
+        self.on_final = on_final
+        self.sample_rate = sample_rate
+
+        self._buf: list[np.ndarray] = []
+        self._lock = threading.Lock()
+        self._last_text = ""
+        self._running = False
+        self._thread: Optional[threading.Thread] = None
+
+    def start(self) -> None:
+        self._running = True
+        self._thread = threading.Thread(target=self._loop, daemon=True)
+        self._thread.start()
+
+    def stop(self) -> None:
+        self._running = False
+        if self._thread:
+            self._thread.join(timeout=5)
+
+    def feed(self, chunk: np.ndarray) -> None:
+        with self._lock:
+            self._buf.append(chunk.astype(np.float32))
+            # Hard cap — keep under MAX_BUFFER_SEC
+            total = sum(len(c) for c in self._buf)
+            max_samples = int(MAX_BUFFER_SEC * self.sample_rate)
+            while total > max_samples and self._buf:
+                dropped = self._buf.pop(0)
+                total -= len(dropped)
+
+    def end_of_speech(self) -> str:
+        """Transcribe buffer, fire on_final, clear buffer. Returns final text."""
+        audio = self._get_audio()
+        if audio is None:
+            return ""
+
+        text = self._transcribe(audio, is_final=True)
+
+        with self._lock:
+            self._buf = []
+            self._last_text = ""
+
+        if text:
+            self.on_final(text)
+        return text
+
+    def clear(self) -> None:
+        with self._lock:
+            self._buf = []
+            self._last_text = ""
+
+    # ── Internals ─────────────────────────────────────────────────────────
+
+    def _loop(self) -> None:
+        while self._running:
+            time.sleep(TRANSCRIBE_EVERY)
+            audio = self._get_audio()
+            if audio is None:
+                continue
+            text = self._transcribe(audio, is_final=False)
+            if text and text != self._last_text:
+                self._last_text = text
+                self.on_partial(text)
+
+    def _get_audio(self) -> Optional[np.ndarray]:
+        with self._lock:
+            if not self._buf:
+                return None
+            audio = np.concatenate(self._buf).astype(np.float32)
+        if len(audio) / self.sample_rate < MIN_AUDIO_SEC:
+            return None
+        return audio
+
+    # def _get_audio(self) -> Optional[np.ndarray]:
+    #     with self._lock:
+    #         if not self._buf:
+    #             return None
+    #         audio = np.concatenate(self._buf).astype(np.float32)
+    #     if len(audio) / self.sample_rate < MIN_AUDIO_SEC:
+    #         return None
+    #     # RMS gate — reject audio that's too quiet to be real speech
+    #     rms = float(np.sqrt(np.mean(audio**2)))
+    #     if rms < 0.01:
+    #         return None
+    #     return audio
+
+    def _transcribe(self, audio: np.ndarray, is_final: bool) -> str:
+        model = get_model()
+        try:
+            with _infer_lock:
+                result = whisper.transcribe(
+                    model,
+                    audio,
+                    language="en",
+                    fp16=(WHISPER_DEVICE == "cuda"),
+                    temperature=0,
+                    condition_on_previous_text=False,  # prevents looping context
+                    no_speech_threshold=NO_SPEECH_THRESHOLD,
+                    compression_ratio_threshold=COMPRESSION_RATIO_THRESHOLD,
+                    logprob_threshold=LOGPROB_THRESHOLD,
+                )
+
+            # ── Hallucination checks ──────────────────────────────────────
+            segments = result.get("segments", [])
+
+            # If Whisper flagged all segments as no-speech, discard
+            if segments:
+                avg_no_speech = sum(s.get("no_speech_prob", 0) for s in segments) / len(
+                    segments
+                )
+                if avg_no_speech > NO_SPEECH_THRESHOLD:
+                    return ""
+
+            text = _clean_text(result.get("text", ""))
+
+            if not text:
+                return ""
+
+            # Repetition loop detection
+            if _has_repetition(text):
+                return ""
+
+            return text
+
+        except Exception as e:
+            print(f"[StreamingTranscriber] Error: {e}")
+            return ""
+
+### transcription/transcriber.py
+"""
+transcription/transcriber.py
+Pure transcription logic — takes a numpy audio array, returns text.
+Decoupled from Flask and from file I/O.
+"""
+
+import threading
+import time
+
+import numpy as np
+import whisper
+
+from config import WHISPER_DEVICE
+from transcription.whisper_loader import get_model
+
+# One lock so GPU calls never overlap
+_infer_lock = threading.Lock()
+
+
+def transcribe_audio(audio: np.ndarray) -> str:
+    """
+    Transcribe a 16 kHz float32 mono numpy array.
+    Returns the transcribed string (stripped).
+    Raises on Whisper errors — callers should handle exceptions.
+    """
+    model = get_model()
+
+    duration = len(audio) / 16_000
+    print(f"[Transcriber] Transcribing {duration:.1f}s of audio ...", flush=True)
+
+    t0 = time.time()
+    with _infer_lock:
+        result = whisper.transcribe(
+            model,
+            audio,
+            language="en",
+            fp16=(WHISPER_DEVICE == "cuda"),
+            temperature=0,
+            condition_on_previous_text=True,
+        )
+
+    text = result["text"].strip()
+    print(f"[Transcriber] '{text}'  ({time.time() - t0:.2f}s)", flush=True)
+    return text
+
+### transcription/whisper_loader.py
+"""
+transcription/whisper_loader.py
+Handles loading the Whisper model exactly once (singleton).
+Thread-safe via a lock so the server can handle concurrent requests.
+"""
+
+import threading
+
+import torch
+import whisper
+import whisper.model
+
+from config import WHISPER_MODEL_NAME, WHISPER_MODEL_PATH, WHISPER_DEVICE
+
+_model = None
+_lock  = threading.Lock()
+
+
+def get_model() -> whisper.model.Whisper:
+    """
+    Return the loaded Whisper model, loading it on first call.
+    Thread-safe — safe to call from multiple request threads.
+    """
+    global _model
+    if _model is not None:
+        return _model
+
+    with _lock:
+        # Double-checked locking: another thread may have loaded it while we waited
+        if _model is not None:
+            return _model
+
+        print(f"[WhisperLoader] Loading '{WHISPER_MODEL_NAME}' from {WHISPER_MODEL_PATH} ...")
+        checkpoint = torch.load(str(WHISPER_MODEL_PATH), map_location="cpu")
+        dims  = whisper.model.ModelDimensions(**checkpoint["dims"])
+        model = whisper.model.Whisper(dims)
+        model.load_state_dict(checkpoint["model_state_dict"])
+        model = model.to(WHISPER_DEVICE)
+        _model = model
+        print(f"[WhisperLoader] Ready on {WHISPER_DEVICE}.")
+
+    return _model
+
+
+def is_loaded() -> bool:
+    return _model is not None
+
+### tts/supertonic_model.py
+"""
+tts/supertonic_model.py
+
+Shared, lazily-loaded Supertonic 2 ONNX model wrapper.
+Used by both server_tts/tts_engine.py and client/supertonic_player.py
+so the model is only downloaded / loaded once per process.
+
+Fixes for clipped / dropped words
+───────────────────────────────────
+1. LATENT CANVAS MARGIN — lat_lens is padded by +LATENT_MARGIN chunks so the
+   waveform is never cut short by an undersized canvas.
+2. AUDIO PRE/POST PADDING — 30 ms of silence prepended and 80 ms appended to
+   the raw waveform so the DAC and the prosody model both get clean boundaries.
+3. TEXT NORMALISATION — text is wrapped in a comma-space prefix and a period
+   suffix so the prosody encoder sees clean sentence context at both edges.
+   Single-word or very short inputs get extra protection.
+"""
+
+import warnings
+import threading as _threading
+import numpy as np
+from pathlib import Path
+
+MODEL_ID = "onnx-community/Supertonic-TTS-2-ONNX"
+LOCAL_DIR = Path.home() / ".cache" / "supertonic2"
+
+VOICES = ["M1", "M2", "M3", "M4", "M5", "F1", "F2", "F3", "F4", "F5"]
+LANGUAGES = ["en", "ko", "es", "pt", "fr"]
+
+# Extra latent chunks added to the canvas to prevent end-clipping
+LATENT_MARGIN = 3
+
+# Silence padding added around the raw waveform (in seconds)
+PRE_PAD_SEC = 0.03  # 30 ms before — prevents first-phoneme clip
+POST_PAD_SEC = 0.08  # 80 ms after  — lets the last phoneme ring out
+
+# ── Module-level singleton ────────────────────────────────────────────────────
+_model_instance = None
+
+
+def get_model() -> "SupertonicModel":
+    global _model_instance
+    if _model_instance is None:
+        _model_instance = SupertonicModel(_ensure_downloaded())
+    return _model_instance
+
+
+# ── Download helper ───────────────────────────────────────────────────────────
+
+
+def _ensure_downloaded() -> str:
+    marker = LOCAL_DIR / "onnx" / "text_encoder.onnx"
+    if marker.exists():
+        print(f"[Supertonic] Model cached at {LOCAL_DIR}")
+        return str(LOCAL_DIR)
+
+    print(f"[Supertonic] Downloading {MODEL_ID} → {LOCAL_DIR} …")
+    print("[Supertonic] (one-time download, ~200 MB)")
+    from huggingface_hub import snapshot_download
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        snapshot_download(repo_id=MODEL_ID, local_dir=str(LOCAL_DIR))
+    print("[Supertonic] Download complete.\n")
+    return str(LOCAL_DIR)
+
+
+# ── Text normalisation ────────────────────────────────────────────────────────
+
+
+def _normalise_text(text: str) -> str:
+    """
+    Ensure the text has clean prosody context at both edges.
+
+    - Strip whitespace
+    - Guarantee it ends with sentence-final punctuation so the model
+      knows the utterance is complete (prevents trailing word dropout)
+    - Very short inputs (≤ 3 words) get a silent lead-in comma so the
+      prosody encoder doesn't clip the first phoneme
+    """
+    text = text.strip()
+    if not text:
+        return text
+
+    # Ensure terminal punctuation
+    if text[-1] not in ".!?,;:":
+        text = text + "."
+
+    # Short utterances need a prosody lead-in
+    if len(text.split()) <= 3:
+        text = ", " + text
+
+    return text
+
+
+# ── Model ─────────────────────────────────────────────────────────────────────
+
+
+class SupertonicModel:
+    SAMPLE_RATE = 44100
+    CHUNK_COMPRESS_FACTOR = 6
+    BASE_CHUNK_SIZE = 512
+    LATENT_DIM = 24
+    STYLE_DIM = 128
+    LATENT_SIZE = BASE_CHUNK_SIZE * 6  # 3072
+
+    def __init__(self, model_path: str):
+        import os
+        import onnxruntime as ort
+        from transformers import AutoTokenizer
+
+        self.model_path = model_path
+        self.tokenizer = AutoTokenizer.from_pretrained(model_path)
+
+        opts = ort.SessionOptions()
+        opts.log_severity_level = 3
+
+        onnx_dir = os.path.join(model_path, "onnx")
+        self.text_encoder = ort.InferenceSession(
+            os.path.join(onnx_dir, "text_encoder.onnx"), opts
+        )
+        self.latent_denoiser = ort.InferenceSession(
+            os.path.join(onnx_dir, "latent_denoiser.onnx"), opts
+        )
+        self.voice_decoder = ort.InferenceSession(
+            os.path.join(onnx_dir, "voice_decoder.onnx"), opts
+        )
+        print(f"[Supertonic] Model loaded from {model_path}")
+
+    def _load_style(self, voice: str) -> np.ndarray:
+        import os
+
+        path = os.path.join(self.model_path, "voices", f"{voice}.bin")
+        if not os.path.exists(path):
+            raise ValueError(f"Voice '{voice}' not found. Choose from: {VOICES}")
+        return np.fromfile(path, dtype=np.float32).reshape(1, -1, self.STYLE_DIM)
+
+    def generate(
+        self,
+        texts,
+        *,
+        voice="M1",
+        speed=1.0,
+        steps=5,
+        language="en",
+    ):
+        if language not in LANGUAGES:
+            raise ValueError(
+                f"Language '{language}' not supported. Choose from: {LANGUAGES}"
+            )
+
+        # Normalise each text for clean prosody boundaries
+        texts = [_normalise_text(t) for t in texts]
+
+        tagged = [f"<{language}>{t}</{language}>" for t in texts]
+        inputs = self.tokenizer(
+            tagged, return_tensors="np", padding=True, truncation=True
+        )
+        ids = inputs["input_ids"]
+        attn = inputs["attention_mask"]
+        batch = ids.shape[0]
+        style = self._load_style(voice).repeat(batch, axis=0)
+
+        hidden, raw_dur = self.text_encoder.run(
+            None, {"input_ids": ids, "attention_mask": attn, "style": style}
+        )
+        durations = (raw_dur / speed * self.SAMPLE_RATE).astype(np.int64)
+
+        # ── LATENT CANVAS with margin ─────────────────────────────────────
+        # Without LATENT_MARGIN the canvas is sized exactly to the predicted
+        # duration. Any prediction underflow clips the tail. The margin adds
+        # extra chunks so there is always room for the full waveform.
+        lat_lens = (
+            durations + self.LATENT_SIZE - 1
+        ) // self.LATENT_SIZE + LATENT_MARGIN
+        max_len = lat_lens.max()
+        lat_mask = (np.arange(max_len) < lat_lens[:, None]).astype(np.int64)
+        latents = np.random.randn(
+            batch, self.LATENT_DIM * self.CHUNK_COMPRESS_FACTOR, max_len
+        ).astype(np.float32)
+        latents *= lat_mask[:, None, :]
+
+        n_steps = np.full(batch, steps, dtype=np.float32)
+        for step in range(steps):
+            ts = np.full(batch, step, dtype=np.float32)
+            latents = self.latent_denoiser.run(
+                None,
+                {
+                    "noisy_latents": latents,
+                    "latent_mask": lat_mask,
+                    "style": style,
+                    "encoder_outputs": hidden,
+                    "attention_mask": attn,
+                    "timestep": ts,
+                    "num_inference_steps": n_steps,
+                },
+            )[0]
+
+        waveforms = self.voice_decoder.run(None, {"latents": latents})[0]
+
+        pre_pad = int(self.SAMPLE_RATE * PRE_PAD_SEC)
+        post_pad = int(self.SAMPLE_RATE * POST_PAD_SEC)
+
+        results = []
+        for i, length in enumerate(lat_mask.sum(axis=1) * self.LATENT_SIZE):
+            raw = waveforms[i, :length]
+            # ── AUDIO PADDING ─────────────────────────────────────────────
+            # Prepend silence so the DAC/speaker is already open when the
+            # first phoneme hits. Append silence so the last phoneme fully
+            # decays before playback stops.
+            padded = np.concatenate(
+                [
+                    np.zeros(pre_pad, dtype=np.float32),
+                    raw.astype(np.float32),
+                    np.zeros(post_pad, dtype=np.float32),
+                ]
+            )
+            results.append(padded)
+        return results
+
+    def generate_one(self, text, *, voice="M1", speed=1.0, steps=5, language="en"):
+        return self.generate(
+            [text], voice=voice, speed=speed, steps=steps, language=language
+        )[0]
+
+
+# ── Playback ──────────────────────────────────────────────────────────────────
+#
+# WHY a dedicated OutputStream instead of sd.play():
+#   sd.play() reconfigures sounddevice's global default stream. When a mic
+#   InputStream is already open (client TTS mode), macOS CoreAudio raises
+#   err=-50 (kAudio_ParamError). An explicit OutputStream coexists with the
+#   mic stream without touching shared HAL state.
+
+_out_stream = None
+_out_stream_lock = _threading.Lock()
+
+
+def play_audio(
+    audio: np.ndarray, sample_rate: int = SupertonicModel.SAMPLE_RATE
+) -> None:
+    """
+    Play audio through a dedicated OutputStream (blocking).
+    Safe to call while a sounddevice InputStream (mic) is open.
+    Audio padding is already baked in by generate() — no extra padding here.
+    """
+    import sounddevice as sd
+
+    global _out_stream
+
+    # Normalise to [-1, 1]
+    peak = np.abs(audio).max()
+    if peak > 0:
+        audio = audio / peak
+    audio = audio.astype(np.float32)
+
+    done = _threading.Event()
+    pos = [0]
+
+    def _callback(outdata, frames, time_info, status):
+        chunk = audio[pos[0] : pos[0] + frames]
+        if len(chunk) < frames:
+            outdata[: len(chunk), 0] = chunk
+            outdata[len(chunk) :, 0] = 0.0
+            pos[0] += len(chunk)
+            done.set()
+            raise sd.CallbackStop
+        else:
+            outdata[:, 0] = chunk
+            pos[0] += frames
+
+    try:
+        stream = sd.OutputStream(
+            samplerate=sample_rate,
+            channels=1,
+            dtype="float32",
+            callback=_callback,
+            finished_callback=done.set,
+        )
+        with _out_stream_lock:
+            _out_stream = stream
+
+        with stream:
+            stream.start()
+            done.wait()
+
+    except Exception:
+        pass
+    finally:
+        with _out_stream_lock:
+            _out_stream = None
+
+
+def stop_audio() -> None:
+    """Abort current OutputStream immediately (interrupt mid-playback)."""
+    with _out_stream_lock:
+        stream = _out_stream
+    if stream is not None:
+        try:
+            stream.abort()
+        except Exception:
+            pass
