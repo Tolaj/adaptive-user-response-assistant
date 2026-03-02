@@ -1,0 +1,16 @@
+╔══════════════════════════════════════════════════════╗
+  Session started: 2026-03-01 21:12:45
+╚══════════════════════════════════════════════════════╝
+
+[21:12:45] EVENT: Client connected
+
+[21:13:55] Request #01
+  YOU : Can you hear me? Hello? How are you doing? I'm trying to talk to you. I'm literally trying to talk to you.
+  AI  : I can hear you! How can I assist you today?
+  TIMERS → whisper:1.256s  first_token:2.294s  llm_total:2.657s  end_to_end:3.913s  chars:43
+
+[21:14:42] EVENT: Client disconnected
+
+╔══════════════════════════════════════════════════════╗
+  Session ended: 2026-03-01 21:14:42  (duration: 117s, 1 requests)
+╚══════════════════════════════════════════════════════╝

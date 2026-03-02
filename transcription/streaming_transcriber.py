@@ -162,15 +162,6 @@ class StreamingTranscriber:
                 self._last_text = text
                 self.on_partial(text)
 
-    # def _get_audio(self) -> Optional[np.ndarray]:
-    #     with self._lock:
-    #         if not self._buf:
-    #             return None
-    #         audio = np.concatenate(self._buf).astype(np.float32)
-    #     if len(audio) / self.sample_rate < MIN_AUDIO_SEC:
-    #         return None
-    #     return audio
-
     def _get_audio(self) -> Optional[np.ndarray]:
         with self._lock:
             if not self._buf:
@@ -178,11 +169,20 @@ class StreamingTranscriber:
             audio = np.concatenate(self._buf).astype(np.float32)
         if len(audio) / self.sample_rate < MIN_AUDIO_SEC:
             return None
-        # RMS gate — reject audio that's too quiet to be real speech
-        rms = float(np.sqrt(np.mean(audio**2)))
-        if rms < 0.01:
-            return None
         return audio
+
+    # def _get_audio(self) -> Optional[np.ndarray]:
+    #     with self._lock:
+    #         if not self._buf:
+    #             return None
+    #         audio = np.concatenate(self._buf).astype(np.float32)
+    #     if len(audio) / self.sample_rate < MIN_AUDIO_SEC:
+    #         return None
+    #     # RMS gate — reject audio that's too quiet to be real speech
+    #     rms = float(np.sqrt(np.mean(audio**2)))
+    #     if rms < 0.01:
+    #         return None
+    #     return audio
 
     def _transcribe(self, audio: np.ndarray, is_final: bool) -> str:
         model = get_model()

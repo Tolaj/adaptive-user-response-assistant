@@ -88,17 +88,17 @@ SUPERTONIC_SPEED = 1.2  # 0.5 = slow · 1.0 = normal · 1.3 = fast
 # MIN_SPEECH_SEC   = 0.4    # too short, sends noise bursts to Whisper
 # PAUSE_SECONDS    = 1.5    # slightly short, cuts off trailing words
 
-ENERGY_THRESHOLD = 0.035
-MIN_SPEECH_SEC = 0.8
-PAUSE_SECONDS = 1.8
+ENERGY_THRESHOLD = 0.015
+MIN_SPEECH_SEC = 0.4
+PAUSE_SECONDS = 1.5
 
 
 # streaming_transcriber---------------------------
 
-MIN_AUDIO_SEC = 0.8  # too short — Whisper hallucinates on short clips
-NO_SPEECH_THRESHOLD = 0.45  # too lenient — still passes borderline audio
-LOGPROB_THRESHOLD = -0.5  # default, not helping at all
-TRANSCRIBE_EVERY = 1.0  # partials fire too fast, wastes Whisper cycles
+MIN_AUDIO_SEC = 0.4  # too short — Whisper hallucinates on short clips
+NO_SPEECH_THRESHOLD = 0.6  # too lenient — still passes borderline audio
+LOGPROB_THRESHOLD = -1.0  # default, not helping at all
+TRANSCRIBE_EVERY = 0.6  # partials fire too fast, wastes Whisper cycles
 
 
 # ===================== STT / VAD TUNING PARAMETERS =====================

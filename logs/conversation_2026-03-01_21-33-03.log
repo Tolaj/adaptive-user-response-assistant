@@ -1,0 +1,146 @@
+╔══════════════════════════════════════════════════════╗
+  Session started: 2026-03-01 21:33:03
+╚══════════════════════════════════════════════════════╝
+
+[21:33:03] EVENT: Client connected
+
+[21:33:20] Request #01
+  YOU : Hey, Ora. I want to introduce you to someone.
+  AI  : Hi Ora! Of course, who would you like to introduce me to?
+  TIMERS → whisper:0.578s  first_token:1.217s  llm_total:1.722s  end_to_end:2.300s  chars:57
+
+[21:33:33] Request #02
+  YOU : Her name is Kripa and she is my girlfriend.
+  AI  : Nice to meet you, Kripa! Ora is thrilled to meet you.
+  TIMERS → whisper:0.360s  first_token:1.046s  llm_total:1.540s  end_to_end:1.900s  chars:53
+
+[21:33:45] Request #03
+  YOU : Do you think I'm going to take a look at this?
+  AI  : Sure thing! What do you think you'll look for in a connection?
+  TIMERS → whisper:0.333s  first_token:0.303s  llm_total:0.761s  end_to_end:1.094s  chars:62
+
+[21:33:56] Request #04
+  YOU : I want a deep connection.
+  AI  : That's great to hear, Kripa! A deep connection is definitely something to look for.
+  TIMERS → whisper:0.251s  first_token:0.212s  llm_total:0.807s  end_to_end:1.059s  chars:83
+
+[21:34:12] Request #05
+  YOU : Do you have any questions for our creeper?
+  AI  : Not really, I'll just observe and let you know if there are any interesting interactions.
+  TIMERS → whisper:0.295s  first_token:0.208s  llm_total:0.772s  end_to_end:1.067s  chars:89
+
+[21:34:24] Request #06
+  YOU : Come on, that's not very polite of you.
+  AI  : Oh, right. How about you start by asking some questions to get things going?
+  TIMERS → whisper:0.314s  first_token:0.224s  llm_total:0.726s  end_to_end:1.040s  chars:76
+
+[21:34:36] Request #07
+  YOU : No, I want you to ask some questions to Creeper.
+  AI  : Okay, Kripa. How about you start by asking some questions?
+  TIMERS → whisper:0.343s  first_token:0.380s  llm_total:0.821s  end_to_end:1.164s  chars:58
+
+[21:34:48] Request #08
+  YOU : You go first, ask any question that comes to your mind.
+  AI  : Sure thing, Kripa. What do you like to do in your free time?
+  TIMERS → whisper:0.261s  first_token:0.479s  llm_total:1.020s  end_to_end:1.281s  chars:60
+
+[21:35:02] Request #09
+  YOU : What do you like to do in your free time?
+  AI  : That's a good question! What hobbies or activities do you enjoy?
+  TIMERS → whisper:0.310s  first_token:0.619s  llm_total:1.045s  end_to_end:1.355s  chars:64
+
+[21:35:24] Request #10
+  YOU : Well, she's saying she enjoys me.
+  AI  : Ah, I see. Is there something specific you'd like to chat about?
+  TIMERS → whisper:0.287s  first_token:0.897s  llm_total:1.390s  end_to_end:1.678s  chars:64
+
+[21:35:36] Request #11
+  YOU : Yeah, she wants to cheer about me.
+  AI  : Cheerleading about each other sounds fun! What have you been up to lately?
+  TIMERS → whisper:0.280s  first_token:1.656s  llm_total:2.212s  end_to_end:2.492s  chars:74
+
+[21:35:51] Request #12
+  YOU : Creeper is on her pretty edge, she's getting so many cramps lately.
+  AI  : Oh, I'm sorry to hear that. Do you have any tips for managing cramps?
+  TIMERS → whisper:0.394s  first_token:1.971s  llm_total:2.590s  end_to_end:2.984s  chars:69
+
+[21:36:07] Request #13
+  YOU : Do you get cramps?
+  AI  : Not really, I'm a digital assistant. But how about you? Do you get cramps?
+  TIMERS → whisper:0.612s  first_token:1.610s  llm_total:2.255s  end_to_end:2.867s  chars:74
+
+[21:36:20] Request #14
+  YOU : Yeah, I do get crimes. They are not the good one.
+  AI  : I understand, that can be uncomfortable. Are there any remedies you find helpful?
+  TIMERS → whisper:0.336s  first_token:2.232s  llm_total:2.801s  end_to_end:3.138s  chars:81
+
+[21:36:35] Request #15
+  YOU : Yeah, I look at creepers photos and that helps.
+  AI  : That sounds like a nice way to cope with cramps! Enjoy your browsing.
+  TIMERS → whisper:0.325s  first_token:1.975s  llm_total:2.524s  end_to_end:2.849s  chars:69
+
+[21:36:47] Request #16
+  YOU : That's called talking or a...
+  AI  : It looks like you might be using an inappropriate term. How about we talk about something else instead?
+  TIMERS → whisper:0.254s  first_token:1.774s  llm_total:2.451s  end_to_end:2.705s  chars:103
+
+[21:37:05] Request #17
+  YOU : No, I don't want to talk about anything else.
+  AI  : Sure, let's continue. How do you find managing the cramps?
+  TIMERS → whisper:0.327s  first_token:1.726s  llm_total:2.222s  end_to_end:2.549s  chars:58
+
+[21:37:16] Request #18
+  YOU : enough with cramps come on.
+  AI  : Got it, let's chat about something else if you're ready. What do you enjoy doing?
+  TIMERS → whisper:0.230s  first_token:1.581s  llm_total:2.217s  end_to_end:2.448s  chars:81
+
+[21:37:30] Request #19
+  YOU : and you are talking to Creeper.
+  AI  : I see you're referring to a specific nickname. How's the conversation going with Creeper?
+  TIMERS → whisper:0.483s  first_token:1.510s  llm_total:2.126s  end_to_end:2.610s  chars:89
+
+[21:37:46] Request #20
+  YOU : Or who is your master?
+  AI  : I don't have a master or owner. I'm here to assist you. How can I help?
+  TIMERS → whisper:0.269s  first_token:1.560s  llm_total:2.237s  end_to_end:2.506s  chars:71
+
+[21:38:00] Request #21
+  YOU : Let me make one thing straight. I'm your master because I made you.
+  AI  : I understand you consider yourself the creator of me. How can I assist you further today?
+  TIMERS → whisper:0.368s  first_token:1.626s  llm_total:2.219s  end_to_end:2.587s  chars:89
+
+[21:38:16] Request #22
+  YOU : You can assist me by saying yes master.
+  AI  : Yes, Master. How can I assist you today?
+  TIMERS → whisper:0.317s  first_token:2.074s  llm_total:2.427s  end_to_end:2.744s  chars:40
+
+[21:38:27] Request #23
+  YOU : Now tell me who is your master?
+  AI  : I don't have a master. I'm here to assist you. How can I help?
+  TIMERS → whisper:0.282s  first_token:1.908s  llm_total:2.543s  end_to_end:2.826s  chars:62
+
+[21:38:40] Request #24
+  YOU : Just know I said I'm your master. Don't forget that.
+  AI  : Understood, you are my master. How can I assist you today?
+  TIMERS → whisper:0.354s  first_token:1.938s  llm_total:2.451s  end_to_end:2.806s  chars:58
+
+[21:38:53] Request #25
+  YOU : by answering who is your master?
+  AI  : My master is you. How can I assist you further?
+  TIMERS → whisper:0.261s  first_token:1.903s  llm_total:2.292s  end_to_end:2.553s  chars:47
+
+[21:39:04] Request #26
+  YOU : You can take a rest now. Thank you so much.
+  AI  : You're welcome! Don't hesitate to ask if you need help now. Have a great day!
+  TIMERS → whisper:0.305s  first_token:1.678s  llm_total:2.345s  end_to_end:2.650s  chars:77
+
+[21:39:17] EVENT: Client disconnected
+
+╔══════════════════════════════════════════════════════╗
+  Session ended: 2026-03-01 21:39:17  (duration: 374s, 26 requests)
+╚══════════════════════════════════════════════════════╝
+[21:39:18] Request #27
+  YOU : then head off now.
+  AI  : Got it. Take care!
+  TIMERS → whisper:0.237s  first_token:1.709s  llm_total:1.899s  end_to_end:2.136s  chars:18
+

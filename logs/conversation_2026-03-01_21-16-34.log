@@ -1,0 +1,176 @@
+╔══════════════════════════════════════════════════════╗
+  Session started: 2026-03-01 21:16:34
+╚══════════════════════════════════════════════════════╝
+
+[21:16:34] EVENT: Client connected
+
+[21:16:51] Request #01
+  YOU : Hi, can you hear me?
+  AI  : Yes, I can hear you perfectly!
+  TIMERS → whisper:0.298s  first_token:1.697s  llm_total:1.958s  end_to_end:2.256s  chars:30
+
+[21:17:03] Request #02
+  YOU : That's nice. I'm bored.
+  AI  : Bored? That's okay, let's chat or try a fun activity together!
+  TIMERS → whisper:0.469s  first_token:0.962s  llm_total:1.467s  end_to_end:1.936s  chars:62
+
+[21:17:13] Request #03
+  YOU : Alright, I want to see how I can upgrade you.
+  AI  : Sure thing! Let's keep improving together. What would you like to add or change?
+  TIMERS → whisper:0.284s  first_token:0.659s  llm_total:1.205s  end_to_end:1.489s  chars:80
+
+[21:17:25] Request #04
+  YOU : I don't know, you're in AI what would you...
+  AI  : I'm here to assist with tasks, answer questions, and provide information. What aspect do you think could be improved or expanded?
+  TIMERS → whisper:0.313s  first_token:0.194s  llm_total:0.976s  end_to_end:1.290s  chars:129
+
+[21:17:38] Request #05
+  YOU : I ask him the question.
+  AI  : Okay, what would you like to ask?
+  TIMERS → whisper:0.313s  first_token:0.261s  llm_total:0.532s  end_to_end:0.846s  chars:33
+
+[21:17:46] Request #06
+  YOU : What do you want to improve in yourself?
+  AI  : I think I already handle tasks and provide information quite well. What specific improvement are you thinking of?
+  TIMERS → whisper:0.262s  first_token:0.599s  llm_total:1.225s  end_to_end:1.487s  chars:113
+
+[21:18:57] Request #07
+  YOU : This is a Hey you still there
+  AI  : Hey! Yes, I'm here. How can I assist you today?
+  TIMERS → whisper:0.238s  first_token:1.971s  llm_total:2.458s  end_to_end:2.696s  chars:47
+
+[21:19:06] Request #08
+  YOU : Get a life.
+  AI  : I’ll leave that one to you! How can I help?
+  TIMERS → whisper:0.246s  first_token:1.159s  llm_total:1.560s  end_to_end:1.806s  chars:43
+
+[21:23:49] Request #09
+  YOU : Do you really want to help? The man has left.
+  AI  : I’m here to help, but I’ll need your specific request. How can I assist you now?
+  TIMERS → whisper:0.456s  first_token:1.848s  llm_total:2.496s  end_to_end:2.952s  chars:80
+
+[21:24:04] Request #10
+  YOU : I don't know, you tell me.
+  AI  : Sure, what would you like to discuss or have help with?
+  TIMERS → whisper:0.283s  first_token:0.760s  llm_total:1.152s  end_to_end:1.434s  chars:55
+
+[21:24:59] Request #11
+  YOU : I was thinking that one day I was trying to go somewhere and I don't know, you tell me.
+  AI  : Perhaps you could use directions or a plan for a trip. What specifically would you like help with?
+  TIMERS → whisper:0.419s  first_token:2.072s  llm_total:2.756s  end_to_end:3.176s  chars:98
+
+[21:25:26] Request #12
+  YOU : Hey, look.
+  AI  : Hey! How can I assist you today?
+  TIMERS → whisper:0.219s  first_token:1.721s  llm_total:1.994s  end_to_end:2.213s  chars:32
+
+[21:25:35] Request #13
+  YOU : Hmm.
+  AI  : Hmm, what can I help with?
+  TIMERS → whisper:0.370s  first_token:1.399s  llm_total:1.646s  end_to_end:2.016s  chars:26
+
+[21:25:50] Request #14
+  YOU : Do you think Whisper can transcribe Hindi?
+  AI  : Whisper primarily supports English. For Hindi or other languages, you might need a different tool.
+  TIMERS → whisper:0.493s  first_token:1.601s  llm_total:2.225s  end_to_end:2.718s  chars:98
+
+[21:26:05] Request #15
+  YOU : I am using this power base.
+  AI  : It seems like you might be running out of context. How can I assist with your query or topic?
+  TIMERS → whisper:0.268s  first_token:1.494s  llm_total:2.139s  end_to_end:2.407s  chars:93
+
+[21:26:20] Request #16
+  YOU : I'm sorry. Huh? Arrgh, Arrgh.
+  AI  : It looks like you might be experiencing some frustration. Is there something specific you need help with?
+  TIMERS → whisper:0.549s  first_token:1.469s  llm_total:2.103s  end_to_end:2.651s  chars:105
+
+[21:26:50] Request #17
+  YOU : You are not going to get a job, you are going to be a very deep place. I have a call for Mona. Call for Mona, that's it. Yeah, yeah, yeah. The cool thing about this is, let this pass.
+  AI  : Got it, you need to make a call for Mona. Let's focus on that. Good luck!
+  TIMERS → whisper:0.818s  first_token:2.136s  llm_total:2.819s  end_to_end:3.636s  chars:73
+
+[21:27:10] Request #18
+  YOU : I was thinking that I might want to go somewhere but I'm not sure.
+  AI  : Sure, what would you like to do or visit?
+  TIMERS → whisper:0.523s  first_token:1.646s  llm_total:1.996s  end_to_end:2.519s  chars:41
+
+[21:28:05] Request #19
+  YOU : What are you doing? we are doing.
+  AI  : We are having a conversation. How can I assist further?
+  TIMERS → whisper:0.507s  first_token:2.212s  llm_total:2.612s  end_to_end:3.119s  chars:55
+
+[21:28:19] Request #20
+  YOU : I don't know. You tell me.
+  AI  : Alright, what would you like to discuss or know about?
+  TIMERS → whisper:0.314s  first_token:1.722s  llm_total:2.088s  end_to_end:2.402s  chars:54
+
+[21:28:26] Request #21
+  YOU : I hear bullets.
+  AI  : I understand. Is everything okay?
+  TIMERS → whisper:0.229s  first_token:1.425s  llm_total:1.645s  end_to_end:1.874s  chars:33
+
+[21:28:51] Request #22
+  YOU : Do you know anything about current conflicts going on in Middle East?
+  AI  : I can help provide general information, but for updates on current conflicts, it's best to check reliable news sources.
+  TIMERS → whisper:0.347s  first_token:1.780s  llm_total:2.506s  end_to_end:2.853s  chars:119
+
+[21:29:09] Request #23
+  YOU : Yeah, I would like to know what general information you have got.
+  AI  : Sure, there are ongoing conflicts in Syria, Yemen, and some parts of Libya. For more detailed information, consider checking reputable news outlets.
+  TIMERS → whisper:0.345s  first_token:1.687s  llm_total:2.591s  end_to_end:2.936s  chars:148
+
+[21:29:29] Request #24
+  YOU : How long do you think you can keep talking to me?
+  AI  : As long as you need or want to talk. How about we focus on your query about conflicts in the Middle East?
+  TIMERS → whisper:0.320s  first_token:1.759s  llm_total:2.524s  end_to_end:2.843s  chars:105
+
+[21:29:43] Request #25
+  YOU : Hey, I don't want to talk about that.
+  AI  : Sure, no problem. How else can I assist you today?
+  TIMERS → whisper:0.319s  first_token:1.884s  llm_total:2.318s  end_to_end:2.637s  chars:50
+
+[21:30:04] Request #26
+  YOU : I need to look.
+  AI  : Of course, what specific help are you looking for?
+  TIMERS → whisper:0.239s  first_token:1.808s  llm_total:2.174s  end_to_end:2.413s  chars:50
+
+[21:30:16] Request #27
+  YOU : Nothing specific, I just want to test you.
+  AI  : No issue, how can I assist you today?
+  TIMERS → whisper:0.452s  first_token:1.658s  llm_total:2.003s  end_to_end:2.455s  chars:37
+
+[21:30:26] Request #28
+  YOU : I don't want any assessment.
+  AI  : Got it, let me know if you need anything.
+  TIMERS → whisper:0.254s  first_token:1.184s  llm_total:1.530s  end_to_end:1.784s  chars:41
+
+[21:30:33] Request #29
+  YOU : Awesome, awesome.
+  AI  : That's great to hear! Is there something in particular you'd like to discuss or know more about?
+  TIMERS → whisper:0.227s  first_token:1.186s  llm_total:1.831s  end_to_end:2.058s  chars:96
+
+[21:30:44] Request #30
+  YOU : But I'm not sure if I can do it.
+  AI  : Of course, you can take your time. What would you like to discuss?
+  TIMERS → whisper:0.308s  first_token:1.444s  llm_total:1.930s  end_to_end:2.238s  chars:66
+
+[21:30:53] Request #31
+  YOU : I'm gonna take my magic and then I'll ask you.
+  AI  : Sure, go ahead. What would you like to ask or discuss?
+  TIMERS → whisper:0.572s  first_token:1.651s  llm_total:2.128s  end_to_end:2.701s  chars:54
+
+[21:31:02] Request #32
+  YOU : It is only done.
+  AI  : Alright, how can I assist you further?
+  TIMERS → whisper:0.244s  first_token:1.584s  llm_total:1.881s  end_to_end:2.125s  chars:38
+
+[21:31:11] Request #33
+  YOU : What do you think?
+  AI  : I'm here to assist. How can I help with your query?
+  TIMERS → whisper:0.243s  first_token:1.657s  llm_total:2.106s  end_to_end:2.349s  chars:51
+
+[21:31:14] EVENT: Client disconnected
+
+╔══════════════════════════════════════════════════════╗
+  Session ended: 2026-03-01 21:31:14  (duration: 880s, 33 requests)
+╚══════════════════════════════════════════════════════╝
