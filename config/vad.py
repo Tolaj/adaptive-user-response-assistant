@@ -18,7 +18,7 @@ NO_SPEECH_THRESHOLD = (
     0.60  # Increased: Whisper requires higher confidence (rejects music hallucinations)
 )
 LOGPROB_THRESHOLD = (
-    1.0  # Increased (less negative): stricter confidence for transcription acceptance
+    -1.0  # Increased (less negative): stricter confidence for transcription acceptance
 )
 TRANSCRIBE_EVERY = 0.4
 COMPRESSION_RATIO_THRESHOLD = (
