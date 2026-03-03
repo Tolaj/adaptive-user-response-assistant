@@ -8,7 +8,7 @@
 #   "voice_to_text_chat"    → Mic → Whisper → LLM → print response (no TTS)
 #   "full"                  → Mic → Whisper → LLM → TTS (everything)
 
-MODE = "full"
+MODE = "text_to_text_chat"
 
 # ── Derived flags (do not edit) ───────────────────────────────
 ENABLE_STT = MODE in ("stt_only", "voice_to_text_chat", "full")

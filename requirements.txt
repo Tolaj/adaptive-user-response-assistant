@@ -24,3 +24,6 @@ pyttsx3
 sounddevice
 onnxruntime 
 transformers
+mcp
+duckduckgo-search
+ddgs

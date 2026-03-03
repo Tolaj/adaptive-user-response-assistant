@@ -34,7 +34,7 @@ from config.vad import (
 from config.server import SERVER_PORT, SERVER_HOST
 from config.features import ENABLE_STT, ENABLE_TTS, SHOW_TEXT
 from config.prompt import (
-    VOICE_SYSTEM_PROMPT,
+    # VOICE_SYSTEM_PROMPT,
     VOICE_MAX_TOKENS,
     VOICE_TEMPERATURE,
     VOICE_MAX_HISTORY_TURNS,
