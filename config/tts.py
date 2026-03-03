@@ -1,0 +1,7 @@
+TTS_MODE = "server"  # "server" | "client"
+TTS_SERVER_BACKEND = "supertonic2"
+
+SUPERTONIC_VOICE = "F1"
+SUPERTONIC_LANGUAGE = "en"
+SUPERTONIC_STEPS = 15
+SUPERTONIC_SPEED = 1.2
