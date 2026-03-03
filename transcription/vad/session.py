@@ -11,8 +11,8 @@ from transcription.vad.processor import process_chunk
 def run_mic_session(
     transcriber: dict,
     vad_state: dict,
-    on_speech_start,
     on_speech_end,
+    on_speech_start=None,
     should_process_chunk=None,
 ) -> None:
     """Run interactive mic capture loop with VAD/preroll + Whisper resampling."""

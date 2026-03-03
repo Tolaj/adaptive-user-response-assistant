@@ -1,6 +1,7 @@
 import threading
 import queue
 import random
+import itertools
 
 from config.tts import (
     SUPERTONIC_VOICE,
@@ -37,6 +38,7 @@ def create_engine(
         "language": language,
         "token_buf": "",
         "queue": queue.PriorityQueue(),
+        "seq": itertools.count(),
         "interrupted": threading.Event(),
         "speaking": threading.Event(),
         "running": False,
@@ -44,5 +46,4 @@ def create_engine(
         "fillers": _FILLERS,
     }
 
-
-SENTINEL = (float("inf"), None)  # sorts last, always
+    SENTINEL = (float("inf"), float("inf"), None)  # sorts last, always

@@ -29,6 +29,7 @@ def log_request(
     llm_first_token: float,
     llm_total: float,
     end_to_end: float,
+    printInConsole: bool = False,
 ) -> None:
     with logger["lock"]:
         logger["req_num"] += 1
@@ -36,11 +37,15 @@ def log_request(
         ts = datetime.now().strftime("%H:%M:%S")
         st = time.time() - logger["session_start"]
         sep = "─" * 54
-        print(f"\n  {sep}\n  Request #{n:02d}  [{ts}]  (+{st:.0f}s)\n  {sep}")
-        print(f"  YOU : {user_text}\n  AI  : {ai_response}\n  {sep}")
-        print(
-            f"  ⏱  Whisper:{whisper_latency:.3f}s  FirstToken:{llm_first_token:.3f}s  LLM:{llm_total:.3f}s  E2E:{end_to_end:.3f}s\n  {sep}\n"
-        )
+        if printInConsole == True:
+            print(f"\n[{ts}] #{n:02d}  YOU: {user_text}")
+            print(f"  AI: {ai_response}")
+            print(
+                f"  Timings (s) → whisper: {whisper_latency:.3f} | "
+                f"LLM first token: {llm_first_token:.3f} | LLM total: {llm_total:.3f} | "
+                f"End-to-end: {end_to_end:.3f} | Session time: {st:.0f}s"
+            )
+            print(sep)
         with open(logger["path"], "a") as f:
             f.write(
                 f"[{ts}] #{n:02d}  YOU:{user_text}  AI:{ai_response}  "
