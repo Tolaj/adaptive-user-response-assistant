@@ -1,3 +1,4 @@
+# config/features.py
 # ── Mode selector ─────────────────────────────────────────────
 # Pick ONE mode:
 #   "server"                → Flask + WebSocket server only
@@ -7,7 +8,7 @@
 #   "voice_to_text_chat"    → Mic → Whisper → LLM → print response (no TTS)
 #   "full"                  → Mic → Whisper → LLM → TTS (everything)
 
-MODE = "stt_only"
+MODE = "full"
 
 # ── Derived flags (do not edit) ───────────────────────────────
 ENABLE_STT = MODE in ("stt_only", "voice_to_text_chat", "full")

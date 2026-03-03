@@ -1,3 +1,4 @@
+# transcription/vad/state.py
 def create_vad_state(sample_rate: int = 16000) -> dict:
     return {
         "sample_rate": sample_rate,

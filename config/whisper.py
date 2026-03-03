@@ -1,3 +1,4 @@
+# config/whisper.py
 import torch
 
 WHISPER_MODEL_NAME = "base"

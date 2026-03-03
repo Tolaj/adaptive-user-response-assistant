@@ -1,3 +1,4 @@
+# transcription/model/singleton.py
 import threading
 from typing import Optional
 import whisper.model as wm

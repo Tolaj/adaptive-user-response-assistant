@@ -1,3 +1,4 @@
+# audio/io/mic.py
 """
 audio/io/mic.py — Microphone input
 

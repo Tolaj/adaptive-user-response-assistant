@@ -1,3 +1,4 @@
+# transcription/model/device.py
 import torch
 
 

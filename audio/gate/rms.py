@@ -1,3 +1,4 @@
+# audio/gate/rms.py
 import numpy as np
 
 

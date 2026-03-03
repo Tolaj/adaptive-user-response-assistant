@@ -1,3 +1,4 @@
+# transcription/stream/__init__.py
 from transcription.stream.buffer import create_buffer
 from transcription.stream.worker import start_worker, stop_worker
 from transcription.stream.final import run_final_pass
@@ -11,6 +12,7 @@ def create_stream(on_partial, on_final, sample_rate: int = 16000) -> dict:
         "last_text": "",
         "running": False,
         "worker_thread": None,
+        "is_transcribing": False,
     }
 
 

@@ -1,3 +1,4 @@
+# tts/engine/worker.py
 import threading
 import time
 
@@ -21,7 +22,7 @@ def _loop(engine: dict) -> None:
 
     while True:
         item = engine["queue"].get()
-        priority, text = item
+        priority, _, text = item
         if text is None:
             break
 
@@ -33,14 +34,13 @@ def _loop(engine: dict) -> None:
             deadline = time.time() + MERGE_WINDOW_SEC
             while time.time() < deadline:
                 try:
-                    nxt_priority, nxt_text = engine["queue"].get_nowait()
-                    if nxt_priority == 0:
-                        engine["queue"].put((nxt_priority, nxt_text))
+                    nxt = engine["queue"].get_nowait()
+                    if nxt[0] == 0:
+                        engine["queue"].put(nxt)
                         break
-                    collected.append(nxt_text)
+                    collected.append(nxt[2])
                 except Exception:
                     time.sleep(0.005)
-
         if engine["interrupted"].is_set():
             continue
 

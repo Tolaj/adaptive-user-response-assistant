@@ -1,3 +1,5 @@
+# transcription/stream/worker.py
+
 import threading
 import time
 
@@ -19,12 +21,29 @@ def stop_worker(state: dict) -> None:
     state["worker_thread"] = None
 
 
+# def _loop(state: dict) -> None:
+#     while state["running"]:
+#         time.sleep(TRANSCRIBE_EVERY)
+#         from transcription.stream.partial import run_partial_pass
+
+#         text = run_partial_pass(state["buf"])
+#         if text and text != state["last_text"]:
+#             state["last_text"] = text
+#             state["on_partial"](text)
+
+
 def _loop(state: dict) -> None:
     while state["running"]:
         time.sleep(TRANSCRIBE_EVERY)
-        from transcription.stream.partial import run_partial_pass
+        if state["is_transcribing"]:
+            continue  # previous call still running — skip
+        state["is_transcribing"] = True
+        try:
+            from transcription.stream.partial import run_partial_pass
 
-        text = run_partial_pass(state["buf"])
-        if text and text != state["last_text"]:
-            state["last_text"] = text
-            state["on_partial"](text)
+            text = run_partial_pass(state["buf"])
+            if text and text != state["last_text"]:
+                state["last_text"] = text
+                state["on_partial"](text)
+        finally:
+            state["is_transcribing"] = False

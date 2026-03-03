@@ -1,3 +1,4 @@
+# transcription/options.py
 from config.vad import (
     NO_SPEECH_THRESHOLD,
     LOGPROB_THRESHOLD,

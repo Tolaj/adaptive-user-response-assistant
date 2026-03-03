@@ -1,3 +1,5 @@
+# transcription/stream/buffer.py
+
 import threading
 import numpy as np
 

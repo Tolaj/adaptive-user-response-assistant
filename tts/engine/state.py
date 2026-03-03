@@ -1,3 +1,4 @@
+# tts/engine/state.py
 import threading
 import queue
 import random
@@ -23,6 +24,8 @@ _FILLERS = [
     "Sure thing.",
 ]
 
+SENTINEL = (float("inf"), float("inf"), None)  # sorts last, always
+
 
 def create_engine(
     voice: str = SUPERTONIC_VOICE,
@@ -45,5 +48,3 @@ def create_engine(
         "worker_thread": None,
         "fillers": _FILLERS,
     }
-
-    SENTINEL = (float("inf"), float("inf"), None)  # sorts last, always

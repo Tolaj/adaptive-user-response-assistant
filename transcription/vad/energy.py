@@ -1,3 +1,4 @@
+# transcription/vad/energy.py
 import numpy as np
 from config.vad import ENERGY_THRESHOLD
 from audio.gate.rms import rms

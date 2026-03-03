@@ -1,3 +1,4 @@
+# transcription/vad/processor.py
 import numpy as np
 from config.vad import PAUSE_SECONDS, MIN_SPEECH_SEC
 from transcription.vad.state import reset_vad_state

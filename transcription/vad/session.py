@@ -1,3 +1,4 @@
+# transcription/vad/session.py
 import numpy as np
 
 from audio.io.mic import open_mic

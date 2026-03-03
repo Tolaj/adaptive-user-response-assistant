@@ -1,3 +1,4 @@
+# transcription/stream/final.py
 import threading
 import numpy as np
 import whisper

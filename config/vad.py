@@ -1,3 +1,4 @@
+# config/vad.py
 RECORD_SAMPLE_RATE = 44100
 PREROLL_SECONDS = 0.25
 SILENCE_THRESHOLD = 0.02
@@ -20,7 +21,7 @@ NO_SPEECH_THRESHOLD = (
 LOGPROB_THRESHOLD = (
     -1.0  # Increased (less negative): stricter confidence for transcription acceptance
 )
-TRANSCRIBE_EVERY = 0.4
+TRANSCRIBE_EVERY = 1.5
 COMPRESSION_RATIO_THRESHOLD = (
     2.0  # Lowered: more aggressive at rejecting repetitive content (music)
 )
