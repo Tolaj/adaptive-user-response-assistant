@@ -339,7 +339,7 @@ def _run_full():
     run_mic_session(
         transcriber=transcriber,
         vad_state=vad_state,
-        # on_speech_start=on_speech_start,
+        on_speech_start=on_speech_start,
         on_speech_end=on_speech_end,
         should_process_chunk=lambda: not is_speaking(engine),
     )

@@ -2,7 +2,7 @@
 import numpy as np
 from config.vad import PAUSE_SECONDS, MIN_SPEECH_SEC
 from transcription.vad.state import reset_vad_state
-from transcription.vad.energy import is_speech_energy
+from transcription.vad.silero import is_speech as _is_speech
 
 
 def process_chunk(
@@ -13,7 +13,7 @@ def process_chunk(
 ) -> None:
     pause_samples = int(PAUSE_SECONDS * state["sample_rate"])
     min_samples = int(MIN_SPEECH_SEC * state["sample_rate"])
-    is_speech = is_speech_energy(chunk)
+    is_speech = _is_speech(chunk, state["sample_rate"])
 
     if is_speech:
         if not state["in_speech"]:

@@ -24,3 +24,7 @@ pyttsx3
 sounddevice
 onnxruntime 
 transformers
+colorama
+jiwer
+silero-vad
+noisereduce

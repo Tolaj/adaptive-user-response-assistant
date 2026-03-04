@@ -1,3 +1,4 @@
+# transcription/download/whisper.py
 from config.paths import WHISPER_DIR
 from config.whisper import WHISPER_MODEL_NAME
 
