@@ -22,6 +22,10 @@ def main():
         _run_voice_chat()
     elif MODE == "full":
         _run_full()
+    elif MODE == "vision_text":
+        _run_vision_text()
+    elif MODE == "vision_speech":
+        _run_vision_speech()
     else:
         print(f"  Unknown MODE '{MODE}'. Check config/features.py")
 
@@ -261,16 +265,6 @@ def _run_full():
     print("  Loading all models...")
     load_whisper()
     get_model()
-    engine = create_engine(
-        voice=SUPERTONIC_VOICE,
-        speed=SUPERTONIC_SPEED,
-        steps=SUPERTONIC_STEPS,
-        language=SUPERTONIC_LANGUAGE,
-    )
-    start_worker(engine)
-    from tts.model.singleton import get_model as get_tts_model
-
-    get_tts_model()
     print("  All ready.\n")
 
     logger = create_logger()
@@ -281,8 +275,20 @@ def _run_full():
     def on_partial(t):
         show_partial(t)
 
+    # ✅ Mic FIRST — before TTS engine opens audio output
     transcriber = create_stream(on_partial=on_partial, on_final=lambda t: None)
     start_stream(transcriber)
+
+    # ✅ TTS engine AFTER mic is open
+    engine = create_engine(
+        voice=SUPERTONIC_VOICE,
+        speed=SUPERTONIC_SPEED,
+        steps=SUPERTONIC_STEPS,
+        language=SUPERTONIC_LANGUAGE,
+    )
+    start_worker(engine)
+    from tts.model.singleton import get_model as get_tts_model
+    get_tts_model()
 
     def on_speech_start():
         interrupt(engine)
@@ -303,7 +309,7 @@ def _run_full():
                     return
                 show_you(text)
                 resume(engine)
-                speak_filler(engine)  # non-blocking — returns immediately
+                speak_filler(engine)
                 start_ai_line()
                 llm_start = time.time()
                 ai_response = ""
@@ -319,12 +325,8 @@ def _run_full():
                 llm_total = time.time() - llm_start
                 llm_first_token = first_token_time if first_token_time else llm_total
                 e2e_total = time.time() - e2e_start
-
-                # Update rolling LLM latency so speak_filler() picks the right
-                # filler duration on the next response
                 if first_token_time is not None:
                     record_llm_latency(engine, first_token_time * 1000)
-
                 log_request(
                     logger,
                     text,
@@ -347,6 +349,166 @@ def _run_full():
         should_process_chunk=lambda: not is_speaking(engine),
     )
     shutdown(engine)
+
+
+
+def _run_vision_text():
+    from vision.model.singleton import get_model, shutdown
+    from vision.inference.query import query_stream
+    from vision.camera import release_camera
+    from config.vlm import VLM_BACKEND
+    from ui.console import prompt_you
+
+    print(f"  Loading VLM (backend={VLM_BACKEND})...")
+    get_model()
+    print("  Ready. Type a question, 'w' to watch, 'q' to quit.\n")
+
+    try:
+        while True:
+            prompt_you()
+            user_input = input().strip()
+
+            if user_input.lower() == "q":
+                break
+
+            elif user_input.lower() == "w":
+                print("👁️  Watching... (Ctrl+C to stop)\n")
+                try:
+                    while True:
+                        print("  \033[92mAI :\033[0m ", end="", flush=True)
+                        for token in query_stream(
+                            "In one sentence, describe what the person is doing right now."
+                        ):
+                            print(token, end="", flush=True)
+                        print()
+                        time.sleep(2)
+                except KeyboardInterrupt:
+                    print("\n⏹️  Stopped watching\n")
+
+            elif user_input:
+                print("  \033[92mAI :\033[0m ", end="", flush=True)
+                for token in query_stream(user_input):
+                    print(token, end="", flush=True)
+                print()
+    finally:
+        release_camera()
+        shutdown()
+
+
+
+def _run_vision_speech():
+    import threading
+    from config.tts import (
+        SUPERTONIC_VOICE,
+        SUPERTONIC_SPEED,
+        SUPERTONIC_STEPS,
+        SUPERTONIC_LANGUAGE,
+    )
+    from config.vad import RECORD_SAMPLE_RATE
+    from config.vlm import VLM_BACKEND
+    from vision.model.singleton import get_model as get_vlm, shutdown as vlm_shutdown
+    from vision.inference.query import query_stream
+    from vision.camera import release_camera
+    from transcription.model.singleton import get_model as load_whisper
+    from transcription.stream import create_stream, start_stream, end_of_speech
+    from transcription.vad.state import create_vad_state, reset_vad_state
+    from transcription.vad.session import run_mic_session
+    from tts.engine.state import create_engine
+    from tts.engine.worker import start_worker
+    from tts.engine.feed import feed_token, flush as tts_flush
+    from tts.engine.control import interrupt, resume, speak_filler, record_llm_latency
+    from tts.engine.status import is_speaking, shutdown as tts_shutdown
+    from tts.model.singleton import get_model as get_tts_model
+    from ui.console import show_partial, show_speaking, show_you, start_ai_line
+
+    print(f"  Loading Whisper + VLM (backend={VLM_BACKEND}) + TTS...")
+    load_whisper()
+    get_vlm()
+    print("  All ready.\n")
+
+    logger = create_logger()
+    lock = threading.Lock()
+    vad_state = create_vad_state(sample_rate=RECORD_SAMPLE_RATE)
+
+    def on_partial(t):
+        show_partial(t)
+
+    # ✅ Mic FIRST — before TTS engine opens audio output
+    transcriber = create_stream(on_partial=on_partial, on_final=lambda t: None)
+    start_stream(transcriber)
+
+    # ✅ TTS engine AFTER mic is open
+    engine = create_engine(
+        voice=SUPERTONIC_VOICE,
+        speed=SUPERTONIC_SPEED,
+        steps=SUPERTONIC_STEPS,
+        language=SUPERTONIC_LANGUAGE,
+    )
+    start_worker(engine)
+    get_tts_model()
+
+    def on_speech_start():
+        interrupt(engine)
+        show_speaking()
+
+    def on_speech_end():
+        if not lock.acquire(blocking=False):
+            return
+        reset_vad_state(vad_state)
+
+        def _run():
+            try:
+                e2e_start = time.time()
+                whisper_start = time.time()
+                text = end_of_speech(transcriber)
+                whisper_latency = time.time() - whisper_start
+                if not text:
+                    return
+                show_you(text)
+                resume(engine)
+                speak_filler(engine)
+                start_ai_line()
+                llm_start = time.time()
+                ai_response = ""
+                first_token_time = None
+                for token in query_stream(text):  # VLM with camera frame
+                    if first_token_time is None:
+                        first_token_time = time.time() - llm_start
+                    print(token, end="", flush=True)
+                    ai_response += token
+                    feed_token(engine, token)
+                tts_flush(engine)
+                print()
+                llm_total = time.time() - llm_start
+                llm_first_token = first_token_time if first_token_time else llm_total
+                if first_token_time is not None:
+                    record_llm_latency(engine, first_token_time * 1000)
+                log_request(
+                    logger,
+                    text,
+                    ai_response,
+                    whisper_latency,
+                    llm_first_token,
+                    llm_total,
+                    time.time() - e2e_start,
+                )
+            finally:
+                lock.release()
+
+        threading.Thread(target=_run, daemon=True).start()
+
+    try:
+        run_mic_session(
+            transcriber=transcriber,
+            vad_state=vad_state,
+            on_speech_start=on_speech_start,
+            on_speech_end=on_speech_end,
+            should_process_chunk=lambda: not is_speaking(engine),
+        )
+    finally:
+        release_camera()
+        vlm_shutdown()
+        tts_shutdown(engine)
 
 
 if __name__ == "__main__":

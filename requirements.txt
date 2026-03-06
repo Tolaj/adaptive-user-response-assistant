@@ -28,3 +28,4 @@ colorama
 jiwer
 silero-vad
 noisereduce
+pynput

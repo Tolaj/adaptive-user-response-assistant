@@ -106,3 +106,4 @@ dmypy.json
 models/
 
 logs/
+lib/

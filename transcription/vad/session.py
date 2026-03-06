@@ -3,7 +3,7 @@ import numpy as np
 
 from audio.io.mic import open_mic
 from audio.transform.resample import resample
-from config.vad import RECORD_SAMPLE_RATE, PREROLL_SECONDS
+from config.vad import RECORD_SAMPLE_RATE, PREROLL_SECONDS, PUSH_TO_TALK
 from config.whisper import WHISPER_SAMPLE_RATE
 from transcription.stream import feed
 from transcription.vad.processor import process_chunk
@@ -16,27 +16,28 @@ def run_mic_session(
     on_speech_end,
     should_process_chunk=None,
 ) -> None:
-    """Run interactive mic capture loop with VAD/preroll + Whisper resampling."""
-    # kills the 2s resampy JIT hit on first chunk
+    if PUSH_TO_TALK:
+        _run_ptt_session(transcriber, vad_state, on_speech_start, on_speech_end, should_process_chunk)
+    else:
+        _run_vad_session(transcriber, vad_state, on_speech_start, on_speech_end, should_process_chunk)
+
+
+def _run_vad_session(
+    transcriber, vad_state, on_speech_start, on_speech_end, should_process_chunk
+) -> None:
+    """Original auto-VAD session — unchanged."""
     resample(np.zeros(882, dtype=np.float32), RECORD_SAMPLE_RATE, WHISPER_SAMPLE_RATE)
 
     preroll_target = int(PREROLL_SECONDS * RECORD_SAMPLE_RATE)
-    preroll_chunks: list[np.ndarray] = []
+    preroll_chunks = []
     preroll_len = 0
 
     def on_chunk(chunk):
         nonlocal preroll_len
-
         if should_process_chunk is not None and not should_process_chunk():
             return
-
         was_in_speech = vad_state["in_speech"]
-        process_chunk(
-            chunk,
-            vad_state,
-            on_speech_start=on_speech_start,
-            on_speech_end=on_speech_end,
-        )
+        process_chunk(chunk, vad_state, on_speech_start=on_speech_start, on_speech_end=on_speech_end)
         now_in_speech = vad_state["in_speech"]
 
         if now_in_speech:
@@ -65,3 +66,43 @@ def run_mic_session(
         on_speech_end()
 
     mic.close()
+
+
+def _run_ptt_session(
+    transcriber, vad_state, on_speech_start, on_speech_end, should_process_chunk
+) -> None:
+    """Push-to-talk session — hold SPACE to record."""
+    from transcription.vad.ptt import start_ptt, stop_ptt
+    from transcription.vad.state import reset_vad_state
+    from transcription.stream import clear_stream
+
+    resample(np.zeros(882, dtype=np.float32), RECORD_SAMPLE_RATE, WHISPER_SAMPLE_RATE)
+
+    _recording = [False]  # mutable flag accessible in closure
+
+    def on_press():
+        if should_process_chunk is not None and not should_process_chunk():
+            return
+        _recording[0] = True
+        clear_stream(transcriber)
+        reset_vad_state(vad_state)
+        on_speech_start()
+
+    def on_release():
+        _recording[0] = False
+        on_speech_end()
+
+    def on_chunk(chunk):
+        if not _recording[0]:
+            return
+        chunk_16k = resample(chunk, RECORD_SAMPLE_RATE, WHISPER_SAMPLE_RATE)
+        feed(transcriber, chunk_16k)
+
+    start_ptt(on_press, on_release)
+    mic = open_mic(on_chunk)
+    mic.start()
+    print("  🔴 Listening... Press ENTER to stop.")
+    input()
+    mic.stop()
+    mic.close()
+    stop_ptt()

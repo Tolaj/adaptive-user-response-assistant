@@ -54,6 +54,7 @@ class MicStream:
                 dtype="float32",
                 blocksize=_BLOCK_SIZE,
                 callback=self._sd_callback,
+                device=sd.default.device[0],
             )
             self._stream.start()
             print(f"[Mic] Started — {RECORD_SAMPLE_RATE} Hz, block={_BLOCK_SIZE}")
