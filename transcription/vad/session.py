@@ -17,6 +17,9 @@ def run_mic_session(
     should_process_chunk=None,
 ) -> None:
     """Run interactive mic capture loop with VAD/preroll + Whisper resampling."""
+    # kills the 2s resampy JIT hit on first chunk
+    resample(np.zeros(882, dtype=np.float32), RECORD_SAMPLE_RATE, WHISPER_SAMPLE_RATE)
+
     preroll_target = int(PREROLL_SECONDS * RECORD_SAMPLE_RATE)
     preroll_chunks: list[np.ndarray] = []
     preroll_len = 0

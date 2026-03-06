@@ -1,7 +1,7 @@
 # PromptPack Output
 
 **Root:** `/Users/swapnil/Documents/Projects/adaptive-user-response-assistant`
-**Generated:** 2026-03-02T23:12:05.324Z
+**Generated:** 2026-03-06T04:27:18.766Z
 
 ---
 
@@ -9,7 +9,6 @@
 
 ```txt
 .
-├─ ARCHITECTURE.md
 ├─ audio/
 │  ├─ __init__.py
 │  ├─ gate/
@@ -24,6 +23,7 @@
 │  │  └─ write.py
 │  └─ transform/
 │     ├─ __init__.py
+│     ├─ denoise.py
 │     ├─ mono.py
 │     ├─ normalise.py
 │     └─ resample.py
@@ -60,10 +60,11 @@
 │  │  ├─ __init__.py
 │  │  ├─ load.py
 │  │  └─ singleton.py
-│  └─ prompt/
-│     ├─ __init__.py
-│     ├─ build.py
-│     └─ system.py
+│  ├─ prompt/
+│  │  ├─ __init__.py
+│  │  ├─ build.py
+│  │  └─ system.py
+│  └─ tools/
 ├─ logs/
 ├─ main.py
 ├─ requirements.txt
@@ -98,6 +99,20 @@
 │        ├─ __init__.py
 │        ├─ create.py
 │        └─ teardown.py
+├─ tests/
+│  ├─ benchmark_stt.py
+│  ├─ benchmark_tts.py
+│  └─ recordings/
+│     ├─ sentence_01.wav
+│     ├─ sentence_02.wav
+│     ├─ sentence_03.wav
+│     ├─ sentence_04.wav
+│     ├─ sentence_05.wav
+│     ├─ sentence_06.wav
+│     ├─ sentence_07.wav
+│     ├─ sentence_08.wav
+│     ├─ sentence_09.wav
+│     └─ sentence_10.wav
 ├─ transcription/
 │  ├─ __init__.py
 │  ├─ download/
@@ -129,6 +144,7 @@
 │     ├─ energy.py
 │     ├─ processor.py
 │     ├─ session.py
+│     ├─ silero.py
 │     └─ state.py
 ├─ tts/
 │  ├─ __init__.py
@@ -175,280 +191,6 @@
 ## 2) File Contents
 
 
-### ARCHITECTURE.md
-
-```markdown
-
-
-# Adaptive Assistant Architecture Guide
-
-## CRITICAL FILE: config/vad.py
-
-This is THE most important file for fixing STT (speech-to-text) problems.
-
-### Quick Parameter Reference
-
-| Parameter | Default | Problem | Solution |
-|-----------|---------|---------|----------|
-| ENERGY_THRESHOLD | 0.045 | Hallucinating | Increase to 0.06-0.10 |
-| NO_SPEECH_THRESHOLD | 0.92 | "I'm sorry" on silence | Increase to 0.94-0.98 |
-| LOGPROB_THRESHOLD | -0.4 | Low confidence outputs | Make less negative: -0.2 to 0.0 |
-| PREROLL_SECONDS | 0.15 | First word clipped | Increase to 0.20-0.30 |
-| MIN_SPEECH_SEC | 0.48 | Missing words | Decrease to 0.25-0.35 |
-| MIN_AUDIO_SEC | 0.65 | Short hallucinations | Increase to 0.80-1.0 |
-| COMPRESSION_RATIO_THRESHOLD | 1.5 | Music transcribing | Decrease to 0.8-1.2 |
-| TRANSCRIBE_EVERY | 0.6 | Slow feedback | Decrease to 0.3-0.4 |
-
----
-
-## Key Configuration Files (In Priority Order)
-
-### 1. config/vad.py (CRITICAL - STT Quality)
-File: `/Users/swapnil/Documents/Projects/adaptive-user-response-assistant/config/vad.py`
-
-**What it controls:**
-- VAD (Voice Activity Detection) sensitivity → when to start/stop transcription
-- Whisper confidence thresholds → accept/reject transcriptions
-- Preroll buffer → capture audio before speech detected
-
-**To fix:**
-
-**Hallucinating on silence:**
-\`\`\`python
-NO_SPEECH_THRESHOLD = 0.96        # was 0.92
-LOGPROB_THRESHOLD = -0.2          # was -0.4  
-COMPRESSION_RATIO_THRESHOLD = 1.0 # was 1.5
-\`\`\`
-
-**Missing words from real speech:**
-\`\`\`python
-ENERGY_THRESHOLD = 0.03        # was 0.045
-MIN_SPEECH_SEC = 0.35          # was 0.48
-PREROLL_SECONDS = 0.25         # was 0.15
-\`\`\`
-
-**Background music transcribing:**
-\`\`\`python
-COMPRESSION_RATIO_THRESHOLD = 0.8  # was 1.5
-NO_SPEECH_THRESHOLD = 0.95         # was 0.92
-ENERGY_THRESHOLD = 0.07            # was 0.045
-\`\`\`
-
----
-
-### 2. config/features.py (Mode Selection)
-File: `/Users/swapnil/Documents/Projects/adaptive-user-response-assistant/config/features.py`
-
-**What it controls:**
-- Which mode to run: stt_only, tts_only, text_to_text_chat, voice_to_text_chat, full, server
-
-**To change mode:**
-\`\`\`python
-MODE = "voice_to_text_chat"  # Change to: "stt_only", "tts_only", "full", etc.
-\`\`\`
-
----
-
-### 3. config/llm.py (LLM Quality)
-File: `/Users/swapnil/Documents/Projects/adaptive-user-response-assistant/config/llm.py`
-
-**What it controls:**
-- TEMPERATURE: 0.0=boring, 1.0+=creative
-- n_ctx: context size (2048=default, reduce to 1024 for speed)
-- MODEL_PATH: which LLM to use
-
-**To make responses more creative:**
-\`\`\`python
-TEMPERATURE = 1.2  # was 0.7
-\`\`\`
-
-**To speed up LLM:**
-\`\`\`python
-N_CTX = 1024  # was 2048
-\`\`\`
-
----
-
-### 4. config/tts.py (TTS Voice)
-File: `/Users/swapnil/Documents/Projects/adaptive-user-response-assistant/config/tts.py`
-
-**What it controls:**
-- SUPERTONIC_SPEED: 0.5=slow, 1.0=normal, 1.5=fast
-- SUPERTONIC_STEPS: 50=fast/lower quality, 150=slow/best quality
-- SUPERTONIC_VOICE: which voice to use
-
-**To make TTS slower & clearer:**
-\`\`\`python
-SUPERTONIC_SPEED = 0.7    # was 1.0
-SUPERTONIC_STEPS = 120    # was 100
-\`\`\`
-
-**To make TTS faster:**
-\`\`\`python
-SUPERTONIC_SPEED = 1.3    # was 1.0
-SUPERTONIC_STEPS = 50     # was 100
-\`\`\`
-
----
-
-## All Files & What They Do
-
-### Entry Point
-- **main.py** — Determines which mode to run
-  - Imports MODE from config/features.py
-  - Calls _run_stt_only(), _run_voice_chat(), _run_full(), etc.
-
-### Configuration (Edit These To Tune)
-- **config/features.py** — MODE selection
-- **config/vad.py** — Speech detection tuning (CRITICAL!)
-- **config/llm.py** — LLM settings (temperature, context size)
-- **config/tts.py** — TTS settings (speed, quality, voice)
-- **config/whisper.py** — Whisper STT settings
-- **config/server.py** — Server settings
-
-### Microphone & Audio (Understand These)
-- **audio/io/mic.py** — Opens mic at 44.1kHz
-- **audio/transform/resample.py** — Converts 44.1kHz → 16kHz (MUST NOT REMOVE!)
-- **transcription/vad/session.py** — Mic loop with VAD & preroll
-- **transcription/vad/processor.py** — Detects speech vs silence
-- **transcription/vad/energy.py** — RMS + ZCR algorithm
-
-### Whisper (Speech-to-Text)
-- **transcription/stream/buffer.py** — Buffers 16kHz audio
-- **transcription/stream/worker.py** — Thread that transcribes periodically
-- **transcription/stream/partial.py** — Real-time streaming text
-- **transcription/stream/final.py** — Final transcription (when speech ends)
-- **transcription/hallucination/confidence.py** — Filters by Whisper confidence
-- **transcription/hallucination/repetition.py** — Filters repetitive/music audio
-
-### LLM (Language Model)
-- **llm/model/singleton.py** — Load Qwen once
-- **llm/inference/stream.py** — Stream tokens
-- **llm/history/state.py** — Keep conversation context
-
-### TTS (Text-to-Speech)
-- **tts/model/singleton.py** — Load Supertonic once
-- **tts/engine/worker.py** — Generate audio from tokens
-- **tts/engine/control.py** — interrupt, resume, speak_filler
-
-### Utilities
-- **ui/console.py** — Colored terminal output
-- **server/logger.py** — Log to file with latency metrics
-
----
-
-## 6 Operating Modes
-
-Change MODE in config/features.py to switch:
-
-- **stt_only** — Speak → Whisper → Text (test STT)
-- **tts_only** — Type → TTS → Speaker (test TTS)
-- **text_to_text_chat** — Type → LLM → Type (test LLM)
-- **voice_to_text_chat** — Speak → Whisper → LLM → Type
-- **full** — Speak → Whisper → LLM → TTS → Speaker (complete voice loop)
-- **server** — WebSocket API server
-
----
-
-## Common Fixes
-
-### Fix 1: Stop Hallucinating "I'm sorry", "Thank you", "Okay"
-**File:** config/vad.py
-**Changes:**
-\`\`\`python
-NO_SPEECH_THRESHOLD = 0.98        # Increase from 0.92
-LOGPROB_THRESHOLD = 0.0           # Increase from -0.4
-COMPRESSION_RATIO_THRESHOLD = 0.8 # Decrease from 1.5
-\`\`\`
-
-### Fix 2: Capture First Word (Not Clipped)
-**File:** config/vad.py
-**Changes:**
-\`\`\`python
-PREROLL_SECONDS = 0.25  # Increase from 0.15
-\`\`\`
-
-### Fix 3: Don't Miss Words from Real Speech
-**File:** config/vad.py
-**Changes:**
-\`\`\`python
-ENERGY_THRESHOLD = 0.03   # Decrease from 0.045
-MIN_SPEECH_SEC = 0.35     # Decrease from 0.48
-\`\`\`
-
-### Fix 4: Stop Music Being Transcribed
-**File:** config/vad.py
-**Changes:**
-\`\`\`python
-COMPRESSION_RATIO_THRESHOLD = 0.8  # Decrease from 1.5
-NO_SPEECH_THRESHOLD = 0.95         # Increase from 0.92
-\`\`\`
-
-### Fix 5: More Creative LLM
-**File:** config/llm.py
-**Changes:**
-\`\`\`python
-TEMPERATURE = 1.2  # Increase from 0.7
-\`\`\`
-
-### Fix 6: Faster LLM Response
-**File:** config/llm.py
-**Changes:**
-\`\`\`python
-N_CTX = 1024  # Decrease from 2048
-\`\`\`
-
-### Fix 7: Better TTS Quality
-**File:** config/tts.py
-**Changes:**
-\`\`\`python
-SUPERTONIC_STEPS = 120  # Increase from 100
-SUPERTONIC_SPEED = 0.7  # Decrease from 1.0
-\`\`\`
-
----
-
-## Logging & Metrics
-
-Each interaction is logged to: `logs/conversation_YYYY-MM-DD_HH-MM-SS.log`
-
-**Format:**
-\`\`\`
-[HH:MM:SS] #02  YOU:what user said  AI:what AI responded  whisper:1.206s  ft:0.348s  llm:2.514s  e2e:3.742s
-\`\`\`
-
-**Metrics:**
-- **whisper:X.XXs** — Time for speech-to-text
-- **ft:X.XXs** — Time until LLM gives first token
-- **llm:X.XXs** — Time for full LLM response
-- **e2e:X.XXs** — Total time from speech input to final response
-
----
-
-## When to Use Each Mode
-
-- **stt_only** — Testing mic quality and Whisper accuracy
-- **tts_only** — Testing voice output quality
-- **text_to_text_chat** — Testing LLM reasoning without audio
-- **voice_to_text_chat** — Voice input, text output (quiet environments)
-- **full** — Production mode (full voice assistant)
-- **server** — Running as API server
-
----
-
-## Quick Checklist for Problems
-
-- [ ] Hallucinating on silence? → Increase NO_SPEECH_THRESHOLD in config/vad.py
-- [ ] First word clipped? → Increase PREROLL_SECONDS in config/vad.py
-- [ ] Missing words? → Decrease ENERGY_THRESHOLD in config/vad.py
-- [ ] Music transcribing? → Decrease COMPRESSION_RATIO_THRESHOLD in config/vad.py
-- [ ] Boring LLM? → Increase TEMPERATURE in config/llm.py
-- [ ] Slow LLM? → Decrease N_CTX in config/llm.py
-- [ ] Poor TTS? → Increase SUPERTONIC_STEPS in config/tts.py
-- [ ] Slow TTS? → Decrease SUPERTONIC_STEPS in config/tts.py
-
-```
-
 ### audio/__init__.py
 
 ```python
@@ -466,6 +208,8 @@ from audio.gate.zcr import zero_crossing_rate
 ### audio/gate/__init__.py
 
 ```python
+# audio/gate/__init__.py
+
 from audio.gate.rms import rms
 from audio.gate.amplitude import mean_amplitude
 from audio.gate.zcr import zero_crossing_rate
@@ -475,6 +219,7 @@ from audio.gate.zcr import zero_crossing_rate
 ### audio/gate/amplitude.py
 
 ```python
+# audio/gate/amplitude.py
 import numpy as np
 
 
@@ -493,6 +238,7 @@ if __name__ == "__main__":
 ### audio/gate/rms.py
 
 ```python
+# audio/gate/rms.py
 import numpy as np
 
 
@@ -512,6 +258,7 @@ if __name__ == "__main__":
 ### audio/gate/zcr.py
 
 ```python
+# audio/gate/zcr.py
 import numpy as np
 
 
@@ -545,6 +292,7 @@ from audio.io.mic import open_mic
 ### audio/io/mic.py
 
 ```python
+# audio/io/mic.py
 """
 audio/io/mic.py — Microphone input
 
@@ -711,15 +459,48 @@ if __name__ == "__main__":
 ### audio/transform/__init__.py
 
 ```python
+# audio/transform/__init__.py
 from audio.transform.mono import to_mono
 from audio.transform.resample import resample
 from audio.transform.normalise import normalise
 
 ```
 
+### audio/transform/denoise.py
+
+```python
+# audio/transform/denoise.py
+import numpy as np
+
+
+def denoise(
+    audio: np.ndarray, noise_profile: np.ndarray, sr: int = 16000
+) -> np.ndarray:
+    """
+    Reduce noise in audio using a noise profile sample.
+    noise_profile: a short clip of background noise (from preroll).
+    Returns cleaned float32 array same length as audio.
+    """
+    try:
+        import noisereduce as nr
+
+        return nr.reduce_noise(
+            y=audio.astype(np.float32),
+            sr=sr,
+            y_noise=noise_profile.astype(np.float32),
+            stationary=False,
+            prop_decrease=0.8,  # 0.8 = aggressive but keeps speech natural
+        ).astype(np.float32)
+    except Exception as e:
+        print(f"[Denoise] {e}")
+        return audio
+
+```
+
 ### audio/transform/mono.py
 
 ```python
+# audio/transform/mono.py
 import numpy as np
 
 
@@ -741,6 +522,7 @@ if __name__ == "__main__":
 ### audio/transform/normalise.py
 
 ```python
+# audio/transform/normalise.py
 import numpy as np
 
 
@@ -763,15 +545,20 @@ if __name__ == "__main__":
 ### audio/transform/resample.py
 
 ```python
+# audio/transform/resample.py
 import numpy as np
 import resampy
 
 
 def resample(audio: np.ndarray, from_sr: int, to_sr: int) -> np.ndarray:
-    """Resample audio. No-op if rates match."""
+    """Resample audio using scipy. No-op if rates match."""
     if from_sr == to_sr:
         return audio.astype(np.float32)
-    return resampy.resample(audio, from_sr, to_sr).astype(np.float32)
+    from scipy.signal import resample_poly
+    from math import gcd
+
+    g = gcd(from_sr, to_sr)
+    return resample_poly(audio, to_sr // g, from_sr // g).astype(np.float32)
 
 
 if __name__ == "__main__":
@@ -833,6 +620,7 @@ from config.prompt import (
 ### config/features.py
 
 ```python
+# config/features.py
 # ── Mode selector ─────────────────────────────────────────────
 # Pick ONE mode:
 #   "server"                → Flask + WebSocket server only
@@ -868,6 +656,7 @@ CPU_THREADS = max(1, os.cpu_count() // 2)
 ### config/paths.py
 
 ```python
+# config/paths.py
 from pathlib import Path
 
 BASE_DIR = Path(__file__).parent.parent
@@ -885,11 +674,13 @@ for _d in (LOGS_DIR, MODELS_DIR, WHISPER_DIR, LLM_DIR, SUPERTONIC_DIR):
 ### config/prompt.py
 
 ```python
+# config/prompt.py
 VOICE_SYSTEM_PROMPT = (
-    "You are a helpful voice assistant. "
-    "Keep responses short and conversational, 1-3 sentences max."
+    "You are a concise voice assistant. "
+    "Reply in 1 sentence, 10 words max. "
+    "Never use lists or markdown."
 )
-VOICE_MAX_TOKENS = 150
+VOICE_MAX_TOKENS = 60  # was 150 — prevents long multi-chunk responses
 VOICE_TEMPERATURE = 0.7
 VOICE_MAX_HISTORY_TURNS = 10
 
@@ -906,12 +697,13 @@ SERVER_HOST = "0.0.0.0"
 ### config/tts.py
 
 ```python
-TTS_MODE = "server"  # "server" | "client"
+# config/tts.py
+TTS_MODE = "server"
 TTS_SERVER_BACKEND = "supertonic2"
 
 SUPERTONIC_VOICE = "F1"
 SUPERTONIC_LANGUAGE = "en"
-SUPERTONIC_STEPS = 15
+SUPERTONIC_STEPS = 7  # was 15 → benchmark: 685ms first chunk avg
 SUPERTONIC_SPEED = 1.2
 
 ```
@@ -919,38 +711,44 @@ SUPERTONIC_SPEED = 1.2
 ### config/vad.py
 
 ```python
+# config/vad.py
 RECORD_SAMPLE_RATE = 44100
-PREROLL_SECONDS = 0.15
+PREROLL_SECONDS = 0.25
 SILENCE_THRESHOLD = 0.02
-SILENCE_DURATION = 1.2
-MIN_SPEECH = 0.45
+SILENCE_DURATION = 0.6
+MIN_SPEECH = 0.3
 ROLLING_WINDOW_SEC = 8.0
 
 ENERGY_THRESHOLD = (
-    0.055  # Increased: rejects background music, needs stronger signal for speech
+    0.025  # Increased: rejects background music, needs stronger signal for speech
 )
 MIN_SPEECH_SEC = (
-    0.65  # Increased: requires longer speech burst (music pauses are short)
+    0.25  # Increased: requires longer speech burst (music pauses are short)
 )
-PAUSE_SECONDS = 1.2
+PAUSE_SECONDS = 0.65
 
-MIN_AUDIO_SEC = 0.4
+MIN_AUDIO_SEC = 0.30
 NO_SPEECH_THRESHOLD = (
-    0.75  # Increased: Whisper requires higher confidence (rejects music hallucinations)
+    0.45  # Increased: Whisper requires higher confidence (rejects music hallucinations)
 )
 LOGPROB_THRESHOLD = (
-    -0.3
-)  # Increased (less negative): stricter confidence for transcription acceptance
-TRANSCRIBE_EVERY = 0.6
-COMPRESSION_RATIO_THRESHOLD = (
-    1.8  # Lowered: more aggressive at rejecting repetitive content (music)
+    -0.8  # Increased (less negative): stricter confidence for transcription acceptance
 )
+TRANSCRIBE_EVERY = 0.8
+COMPRESSION_RATIO_THRESHOLD = (
+    2.0  # Lowered: more aggressive at rejecting repetitive content (music)
+)
+
+SILERO_THRESHOLD = 0.45  # was 0.5 — only triggers on high-confidence speech
+
+DENOISE_ENABLED = False
 
 ```
 
 ### config/whisper.py
 
 ```python
+# config/whisper.py
 import torch
 
 WHISPER_MODEL_NAME = "base"
@@ -1387,9 +1185,6 @@ def main():
         print(f"  Unknown MODE '{MODE}'. Check config/features.py")
 
 
-# ── Modes ──────────────────────────────────────────────────────
-
-
 def _run_server():
     from config.server import SERVER_HOST, SERVER_PORT
     from config.features import ENABLE_STT
@@ -1414,7 +1209,6 @@ def _run_stt_only():
     print("  Loading Whisper...")
     get_model()
     print("  Ready.\n")
-
     logger = create_logger()
 
     def on_partial(t):
@@ -1422,7 +1216,6 @@ def _run_stt_only():
 
     transcriber = create_stream(on_partial=on_partial, on_final=lambda t: None)
     start_stream(transcriber)
-
     vad_state = create_vad_state(sample_rate=RECORD_SAMPLE_RATE)
 
     def on_speech_start():
@@ -1467,9 +1260,8 @@ def _run_tts_only():
         language=SUPERTONIC_LANGUAGE,
     )
     start_worker(engine)
-    get_tts_model()  # Pre-warm the model before showing "Ready"
+    get_tts_model()
     print("  Ready. Type text to speak. Empty line to quit.\n")
-
     logger = create_logger()
     try:
         while True:
@@ -1496,7 +1288,6 @@ def _run_text_chat():
     print("  Loading LLM...")
     get_model()
     print("  Ready. Type to chat. Empty line to quit.\n")
-
     logger = create_logger()
     history = create_history()
     while True:
@@ -1515,9 +1306,14 @@ def _run_text_chat():
             ai_response += token
         print()
         llm_total = time.time() - t_start
-        llm_first_token = first_token_time if first_token_time else llm_total
         log_request(
-            logger, user_text, ai_response, 0.0, llm_first_token, llm_total, llm_total
+            logger,
+            user_text,
+            ai_response,
+            0.0,
+            first_token_time or llm_total,
+            llm_total,
+            llm_total,
         )
 
 
@@ -1537,7 +1333,6 @@ def _run_voice_chat():
     load_whisper()
     get_model()
     print("  Ready.\n")
-
     logger = create_logger()
     history = create_history()
     lock = threading.Lock()
@@ -1560,9 +1355,8 @@ def _run_voice_chat():
         def _run():
             try:
                 e2e_start = time.time()
-                whisper_start = time.time()
                 text = end_of_speech(transcriber)
-                whisper_latency = time.time() - whisper_start
+                whisper_latency = time.time() - e2e_start
                 if not text:
                     lock.release()
                     return
@@ -1578,16 +1372,14 @@ def _run_voice_chat():
                     ai_response += token
                 print()
                 llm_total = time.time() - llm_start
-                llm_first_token = first_token_time if first_token_time else llm_total
-                e2e_total = time.time() - e2e_start
                 log_request(
                     logger,
                     text,
                     ai_response,
                     whisper_latency,
-                    llm_first_token,
+                    first_token_time or llm_total,
                     llm_total,
-                    e2e_total,
+                    time.time() - e2e_start,
                 )
             finally:
                 lock.release()
@@ -1619,7 +1411,7 @@ def _run_full():
     from tts.engine.state import create_engine
     from tts.engine.worker import start_worker
     from tts.engine.feed import feed_token, flush as tts_flush
-    from tts.engine.control import interrupt, resume, speak_filler
+    from tts.engine.control import interrupt, resume, speak_filler, record_llm_latency
     from tts.engine.status import is_speaking, shutdown
     from config.vad import RECORD_SAMPLE_RATE
     from ui.console import show_partial, show_speaking, show_you, start_ai_line
@@ -1635,6 +1427,9 @@ def _run_full():
         language=SUPERTONIC_LANGUAGE,
     )
     start_worker(engine)
+    from tts.model.singleton import get_model as get_tts_model
+
+    get_tts_model()
     print("  All ready.\n")
 
     logger = create_logger()
@@ -1664,11 +1459,10 @@ def _run_full():
                 text = end_of_speech(transcriber)
                 whisper_latency = time.time() - whisper_start
                 if not text:
-                    lock.release()
                     return
                 show_you(text)
                 resume(engine)
-                speak_filler(engine)
+                speak_filler(engine)  # non-blocking — returns immediately
                 start_ai_line()
                 llm_start = time.time()
                 ai_response = ""
@@ -1684,6 +1478,12 @@ def _run_full():
                 llm_total = time.time() - llm_start
                 llm_first_token = first_token_time if first_token_time else llm_total
                 e2e_total = time.time() - e2e_start
+
+                # Update rolling LLM latency so speak_filler() picks the right
+                # filler duration on the next response
+                if first_token_time is not None:
+                    record_llm_latency(engine, first_token_time * 1000)
+
                 log_request(
                     logger,
                     text,
@@ -1742,6 +1542,10 @@ pyttsx3
 sounddevice
 onnxruntime 
 transformers
+colorama
+jiwer
+silero-vad
+noisereduce
 
 ```
 
@@ -1809,6 +1613,7 @@ def log_request(
     llm_first_token: float,
     llm_total: float,
     end_to_end: float,
+    printInConsole: bool = False,
 ) -> None:
     with logger["lock"]:
         logger["req_num"] += 1
@@ -1816,11 +1621,15 @@ def log_request(
         ts = datetime.now().strftime("%H:%M:%S")
         st = time.time() - logger["session_start"]
         sep = "─" * 54
-        print(f"\n  {sep}\n  Request #{n:02d}  [{ts}]  (+{st:.0f}s)\n  {sep}")
-        print(f"  YOU : {user_text}\n  AI  : {ai_response}\n  {sep}")
-        print(
-            f"  ⏱  Whisper:{whisper_latency:.3f}s  FirstToken:{llm_first_token:.3f}s  LLM:{llm_total:.3f}s  E2E:{end_to_end:.3f}s\n  {sep}\n"
-        )
+        if printInConsole == True:
+            print(f"\n[{ts}] #{n:02d}  YOU: {user_text}")
+            print(f"  AI: {ai_response}")
+            print(
+                f"  Timings (s) → whisper: {whisper_latency:.3f} | "
+                f"LLM first token: {llm_first_token:.3f} | LLM total: {llm_total:.3f} | "
+                f"End-to-end: {end_to_end:.3f} | Session time: {st:.0f}s"
+            )
+            print(sep)
         with open(logger["path"], "a") as f:
             f.write(
                 f"[{ts}] #{n:02d}  YOU:{user_text}  AI:{ai_response}  "
@@ -2363,6 +2172,11 @@ def create_session() -> dict:
             language=SUPERTONIC_LANGUAGE,
         )
         start_worker(engine)
+        # added this might cause issues ----
+        from tts.model.singleton import get_model as get_tts_model
+
+        get_tts_model()
+        # ----------------------------------
         session["tts"] = engine
     return session
 
@@ -2390,9 +2204,1337 @@ def teardown_session(session: dict) -> None:
 
 ```
 
+### tests/benchmark_stt.py
+
+```python
+"""
+tests/benchmark_stt.py
+======================
+Record ONCE, benchmark FOREVER.
+
+First run  → records your voice for each sentence, saves to tests/recordings/
+Every run after → loads the saved WAVs and runs them through the live pipeline
+
+This means every time you tweak config/vad.py or the pipeline, you re-run
+the same audio and get apples-to-apples latency + accuracy numbers.
+
+Usage:
+    python tests/benchmark_stt.py              # auto: record if missing, else replay
+    python tests/benchmark_stt.py --record     # force re-record everything
+    python tests/benchmark_stt.py --replay     # force replay only (no mic needed)
+    python tests/benchmark_stt.py --sentence 3 # only sentence #3
+"""
+
+import sys
+import time
+import argparse
+import threading
+from pathlib import Path
+
+# ── always run from project root ──────────────────────────────
+ROOT = Path(__file__).parent.parent
+sys.path.insert(0, str(ROOT))
+
+RECORDINGS_DIR = ROOT / "tests" / "recordings"
+RECORDINGS_DIR.mkdir(parents=True, exist_ok=True)
+
+import numpy as np
+import sounddevice as sd
+import soundfile as sf
+from colorama import Fore, Style, init as colorama_init
+
+colorama_init()
+
+# ── project imports ────────────────────────────────────────────
+from config.vad import (
+    RECORD_SAMPLE_RATE,
+    PAUSE_SECONDS,
+    MIN_SPEECH_SEC,
+    PREROLL_SECONDS,
+    ENERGY_THRESHOLD,
+    SILERO_THRESHOLD,
+    TRANSCRIBE_EVERY,
+)
+from config.whisper import WHISPER_SAMPLE_RATE
+from audio.transform.resample import resample
+from audio.transform.normalise import normalise
+from transcription.model.singleton import get_model
+from transcription.stream.final import run_final_pass
+from transcription.stream.buffer import (
+    create_buffer,
+    append as buf_append,
+    clear_buffer,
+)
+from transcription.hallucination.confidence import passes_confidence
+from transcription.hallucination.noise import clean_text
+from transcription.hallucination.repetition import has_repetition
+import whisper as _whisper
+
+# ── sentences ──────────────────────────────────────────────────
+SENTENCES = [
+    "open the calendar and show me this week",
+    "what is the weather like today",
+    "set a reminder for tomorrow at nine am",
+    "send a message to John saying I will be late",
+    "search the web for latest AI news",
+    "turn off the lights in the living room",
+    "call mom when you get a chance",
+    "how long does it take to drive to the airport",
+    "play some music on spotify",
+    "the quick brown fox jumps over the lazy dog",
+]
+
+RECORD_SECONDS = 5  # window given to speak each sentence
+COUNTDOWN_SEC = 3
+
+
+# ── terminal helpers ───────────────────────────────────────────
+def c(color, msg):
+    return f"{color}{msg}{Style.RESET_ALL}"
+
+
+def ok(m):
+    print(f"  {c(Fore.GREEN,  '✓')}  {m}")
+
+
+def fail(m):
+    print(f"  {c(Fore.RED,    '✗')}  {m}")
+
+
+def info(m):
+    print(f"  {c(Fore.CYAN,   '→')}  {m}")
+
+
+def warn(m):
+    print(f"  {c(Fore.YELLOW, '!')}  {m}")
+
+
+def head(m):
+    print(f"\n  {c(Fore.YELLOW + Style.BRIGHT, m)}")
+
+
+def rule():
+    print(f"  {'─' * 60}")
+
+
+def countdown(n: int) -> None:
+    for i in range(n, 0, -1):
+        print(f"\r  {c(Fore.RED, f'Starting in {i}...')}", end="", flush=True)
+        time.sleep(1)
+    print("\r" + " " * 30 + "\r", end="")
+
+
+# ── WER ────────────────────────────────────────────────────────
+def _norm(text: str) -> str:
+    import re
+
+    text = text.lower().strip()
+    text = re.sub(r"[^\w\s]", "", text)
+    text = text.replace("i'll", "i will").replace("i'm", "i am")
+    text = text.replace("9am", "nine am").replace("9 am", "nine am")
+    return text
+
+
+def wer_score(ref: str, hyp: str) -> float:
+    if not hyp:
+        return 1.0
+    try:
+        import jiwer
+
+        return jiwer.wer(_norm(ref), _norm(hyp))
+    except ImportError:
+        r, h = _norm(ref).split(), _norm(hyp).split()
+        d = [[0] * (len(h) + 1) for _ in range(len(r) + 1)]
+        for i in range(len(r) + 1):
+            d[i][0] = i
+        for j in range(len(h) + 1):
+            d[0][j] = j
+        for i in range(1, len(r) + 1):
+            for j in range(1, len(h) + 1):
+                d[i][j] = min(
+                    d[i - 1][j] + 1,
+                    d[i][j - 1] + 1,
+                    d[i - 1][j - 1] + (0 if r[i - 1] == h[j - 1] else 1),
+                )
+        return d[len(r)][len(h)] / max(len(r), 1)
+
+
+# ── recording path for a sentence index ───────────────────────
+def wav_path(idx: int) -> Path:
+    return RECORDINGS_DIR / f"sentence_{idx+1:02d}.wav"
+
+
+# ── record one sentence to disk ────────────────────────────────
+def record_sentence(idx: int, sentence: str) -> np.ndarray:
+    path = wav_path(idx)
+    print(f"\n  [{idx+1}/{len(SENTENCES)}] Say: {c(Fore.CYAN, sentence)}")
+    countdown(COUNTDOWN_SEC)
+    print(f"  {c(Fore.RED, '● REC')}  speak now ({RECORD_SECONDS}s)", flush=True)
+
+    audio = sd.rec(
+        int(RECORD_SECONDS * RECORD_SAMPLE_RATE),
+        samplerate=RECORD_SAMPLE_RATE,
+        channels=1,
+        dtype="float32",
+    )
+    sd.wait()
+    audio = audio[:, 0]
+
+    sf.write(str(path), audio, RECORD_SAMPLE_RATE)
+    ok(f"Saved → {path.relative_to(ROOT)}")
+    return audio
+
+
+# ── load saved recording ───────────────────────────────────────
+def load_sentence(idx: int) -> np.ndarray:
+    audio, sr = sf.read(str(wav_path(idx)), dtype="float32")
+    if audio.ndim > 1:
+        audio = audio[:, 0]
+    if sr != RECORD_SAMPLE_RATE:
+        audio = resample(audio, sr, RECORD_SAMPLE_RATE)
+    return audio
+
+
+# ── silence trimmer — mimics what VAD does in real use ────────
+def trim_silence(audio: np.ndarray, sr: int, pad_ms: int = 150) -> np.ndarray:
+    """
+    Adaptive silence trim based on the recording's own noise floor.
+    Uses bottom 20% of frame energies as silence baseline, cuts frames
+    below 4x that level. Matches what VAD actually sends to Whisper.
+    """
+    frame = int(sr * 0.02)  # 20ms
+    hop = frame // 2
+    pad = int(sr * pad_ms / 1000)
+
+    frames = [audio[i : i + frame] for i in range(0, len(audio) - frame, hop)]
+    if not frames:
+        return audio
+
+    energies = np.array([np.sqrt(np.mean(f**2)) for f in frames])
+
+    # noise floor = 20th percentile of all frame energies
+    noise_floor = np.percentile(energies, 20)
+    threshold = max(noise_floor * 4.0, 1e-4)  # 4x noise floor, minimum guard
+
+    speech = energies > threshold
+    if not speech.any():
+        return audio  # nothing above noise — return as-is
+
+    first = max(0, speech.argmax() * hop - pad)
+    last = min(len(audio), (len(speech) - speech[::-1].argmax()) * hop + pad)
+    return audio[first:last]
+
+
+# ── run audio through the live pipeline, measure everything ───
+def run_pipeline(audio: np.ndarray) -> dict:
+    """
+    Feed raw recorded audio (at RECORD_SAMPLE_RATE) through the real
+    resample → normalise → whisper pipeline and return timing + text.
+    Silence is trimmed first to match what VAD sends at runtime.
+    """
+    # 1. trim silence — matches real VAD behaviour
+    audio_trimmed = trim_silence(audio, RECORD_SAMPLE_RATE)
+    audio_duration_ms = len(audio_trimmed) / RECORD_SAMPLE_RATE * 1000
+
+    # 2. resample + normalise
+    t_pre = time.perf_counter()
+    audio_16k = resample(audio_trimmed, RECORD_SAMPLE_RATE, WHISPER_SAMPLE_RATE)
+    audio_16k = normalise(audio_16k)
+    preprocess_ms = (time.perf_counter() - t_pre) * 1000
+
+    # 2. whisper inference
+    model = get_model()
+    from config.vad import (
+        NO_SPEECH_THRESHOLD,
+        LOGPROB_THRESHOLD,
+        COMPRESSION_RATIO_THRESHOLD,
+    )
+    from config.whisper import WHISPER_DEVICE
+
+    t_whisper = time.perf_counter()
+    from transcription.model.lock import infer_lock
+
+    with infer_lock:
+        result = _whisper.transcribe(
+            model,
+            audio_16k,
+            language="en",
+            fp16=(WHISPER_DEVICE == "cuda"),
+            temperature=0,
+            condition_on_previous_text=False,
+            no_speech_threshold=NO_SPEECH_THRESHOLD,
+            compression_ratio_threshold=COMPRESSION_RATIO_THRESHOLD,
+            logprob_threshold=LOGPROB_THRESHOLD,
+        )
+    whisper_ms = (time.perf_counter() - t_whisper) * 1000
+
+    # 3. hallucination filters
+    text = ""
+    passed_confidence = passes_confidence(result)
+    raw_text = clean_text(result.get("text", ""))
+    if passed_confidence and raw_text and not has_repetition(raw_text):
+        text = raw_text
+
+    # no_speech_prob from segments
+    segs = result.get("segments", [])
+    avg_no_speech = (
+        sum(s.get("no_speech_prob", 0) for s in segs) / len(segs) if segs else 0.0
+    )
+
+    return {
+        "text": text,
+        "raw_text": result.get("text", "").strip(),
+        "whisper_ms": whisper_ms,
+        "preprocess_ms": preprocess_ms,
+        "audio_duration_ms": audio_duration_ms,
+        "passed_confidence": passed_confidence,
+        "avg_no_speech": avg_no_speech,
+        "segments": len(segs),
+    }
+
+
+# ── benchmark one sentence ─────────────────────────────────────
+def benchmark_sentence(idx: int, audio: np.ndarray) -> dict:
+    sentence = SENTENCES[idx]
+    r = run_pipeline(audio)
+    score = wer_score(sentence, r["text"])
+
+    # e2e = preprocess + whisper  (VAD pause is real-world overhead, not pipeline)
+    e2e_ms = r["preprocess_ms"] + r["whisper_ms"]
+
+    r["ref"] = sentence
+    r["wer"] = score
+    r["e2e_ms"] = e2e_ms
+    return r
+
+
+# ── print one result ───────────────────────────────────────────
+def print_result(idx: int, r: dict) -> None:
+    ref = SENTENCES[idx]
+    hyp = r["text"]
+
+    wer_c = (
+        Fore.GREEN if r["wer"] < 0.1 else Fore.YELLOW if r["wer"] < 0.3 else Fore.RED
+    )
+    wsp_c = (
+        Fore.GREEN
+        if r["whisper_ms"] < 600
+        else Fore.YELLOW if r["whisper_ms"] < 1200 else Fore.RED
+    )
+    e2e_c = (
+        Fore.GREEN
+        if r["e2e_ms"] < 700
+        else Fore.YELLOW if r["e2e_ms"] < 1400 else Fore.RED
+    )
+    nsp_c = (
+        Fore.GREEN
+        if r["avg_no_speech"] < 0.3
+        else Fore.YELLOW if r["avg_no_speech"] < 0.45 else Fore.RED
+    )
+
+    print(f"\n  [{idx+1}] {c(Fore.CYAN, ref)}")
+    if hyp:
+        print(f"       {c(Fore.WHITE, hyp)}")
+    else:
+        print(f"       {c(Fore.RED, '(no transcript)')}")
+        if r["raw_text"]:
+            print(f"       raw: {c(Fore.YELLOW, r['raw_text'])}")
+
+    dur_str = f"{r['audio_duration_ms']:.0f} ms"
+    wsp_str = f"{r['whisper_ms']:.0f} ms"
+    e2e_str = f"{r['e2e_ms']:.0f} ms"
+    wer_str = f"{r['wer']:.0%}"
+    nsp_str = f"{r['avg_no_speech']:.2f}  (limit={__import__('config.vad', fromlist=['NO_SPEECH_THRESHOLD']).NO_SPEECH_THRESHOLD})"
+
+    info(f"Audio to Whisper  : {dur_str}  (trimmed from 5s)")
+    info(f"Whisper inference : {c(wsp_c, wsp_str)}")
+    info(f"Preprocess        : {r['preprocess_ms']:.0f} ms")
+    info(f"Pipeline total    : {c(e2e_c, e2e_str)}")
+    info(f"no_speech_prob    : {c(nsp_c, nsp_str)}")
+    info(f"WER               : {c(wer_c, wer_str)}")
+    if not r["passed_confidence"]:
+        warn(
+            f"REJECTED by confidence filter — speak louder/clearer or raise NO_SPEECH_THRESHOLD"
+        )
+
+
+# ── summary ────────────────────────────────────────────────────
+def print_summary(results: list[dict]) -> None:
+    head("SUMMARY")
+    print()
+
+    detected = [r for r in results if r["text"]]
+    wsp = [r["whisper_ms"] for r in detected]
+    e2e = [r["e2e_ms"] for r in detected]
+    wers = [r["wer"] for r in detected]
+
+    def stat(vals, unit="ms"):
+        if not vals:
+            return "no data"
+        avg = sum(vals) / len(vals)
+        mn = min(vals)
+        mx = max(vals)
+        return f"avg {avg:.0f}{unit}  min {mn:.0f}{unit}  max {mx:.0f}{unit}"
+
+    rule()
+    print(f"  {'Whisper inference':<26} {stat(wsp)}")
+    print(f"  {'Pipeline total (no VAD)':<26} {stat(e2e)}")
+    if wers:
+        avg_wer = sum(wers) / len(wers)
+        wer_c = (
+            Fore.GREEN if avg_wer < 0.1 else Fore.YELLOW if avg_wer < 0.3 else Fore.RED
+        )
+        print(f"  {'WER':<26} {c(wer_c, f'avg {avg_wer:.1%}')}")
+    print(f"  {'Detection rate':<26} {len(detected)}/{len(results)}")
+    rule()
+
+    # real-world E2E estimate
+    pause_ms = PAUSE_SECONDS * 1000
+    avg_wsp = sum(wsp) / len(wsp) if wsp else 0
+    est_e2e = pause_ms + avg_wsp
+    print(f"\n  Real-world E2E estimate:")
+    print(f"    PAUSE_SECONDS overhead : {pause_ms:.0f} ms   (config/vad.py)")
+    print(f"    Whisper avg            : {avg_wsp:.0f} ms")
+    print(f"    ─────────────────────────────────")
+    e2e_color = (
+        Fore.GREEN if est_e2e < 1200 else Fore.YELLOW if est_e2e < 2000 else Fore.RED
+    )
+    print(f"    Estimated felt latency : {c(e2e_color, f'{est_e2e:.0f} ms')}")
+
+    # diagnosis
+    head("DIAGNOSIS")
+    print()
+    any_rec = False
+
+    if wsp:
+        avg = sum(wsp) / len(wsp)
+        if avg > 1200:
+            warn(
+                f"Whisper is SLOW ({avg:.0f}ms). Try WHISPER_MODEL_NAME='tiny' in config/whisper.py"
+            )
+            any_rec = True
+        elif avg > 600:
+            warn(f"Whisper is moderate ({avg:.0f}ms). 'tiny' model would cut this ~50%")
+            any_rec = True
+        else:
+            ok(f"Whisper is fast ({avg:.0f}ms avg)")
+
+    if PAUSE_SECONDS > 0.6:
+        warn(
+            f"PAUSE_SECONDS={PAUSE_SECONDS} — dominates latency. Lower to 0.4–0.5 for ~{(PAUSE_SECONDS-0.45)*1000:.0f}ms gain"
+        )
+        any_rec = True
+    elif PAUSE_SECONDS > 0.4:
+        warn(f"PAUSE_SECONDS={PAUSE_SECONDS} — try 0.4 for tighter cutoff")
+        any_rec = True
+    else:
+        ok(f"PAUSE_SECONDS={PAUSE_SECONDS} is aggressive (good)")
+
+    miss = len(results) - len(detected)
+    if miss > 0:
+        warn(
+            f"{miss} sentences not detected — VAD may be too strict or recordings too quiet"
+        )
+        any_rec = True
+
+    if not any_rec:
+        ok("Pipeline is well tuned. Paste numbers below to get further advice.")
+
+    # paste block
+    head("NUMBERS TO PASTE")
+    print()
+    print(
+        f"  PAUSE_SECONDS={PAUSE_SECONDS}  SILERO_THRESHOLD={SILERO_THRESHOLD}  TRANSCRIBE_EVERY={TRANSCRIBE_EVERY}"
+    )
+    if wsp:
+        print(
+            f"  whisper_avg={sum(wsp)/len(wsp):.0f}ms  min={min(wsp):.0f}ms  max={max(wsp):.0f}ms"
+        )
+    if e2e:
+        print(f"  pipeline_avg={sum(e2e)/len(e2e):.0f}ms  felt_e2e_est={est_e2e:.0f}ms")
+    if wers:
+        print(
+            f"  wer_avg={sum(wers)/len(wers):.1%}  detection={len(detected)}/{len(results)}"
+        )
+    print()
+
+
+# ── main ───────────────────────────────────────────────────────
+def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument(
+        "--record",
+        action="store_true",
+        help="Force re-record all sentences (overwrites saved WAVs)",
+    )
+    parser.add_argument(
+        "--replay", action="store_true", help="Force replay mode — never touch the mic"
+    )
+    parser.add_argument(
+        "--sentence",
+        type=int,
+        default=0,
+        help="Only run sentence N (1-based). Default: all.",
+    )
+    args = parser.parse_args()
+
+    # figure out which sentences to process
+    indices = [args.sentence - 1] if args.sentence else list(range(len(SENTENCES)))
+
+    # print config header
+    head("STT BENCHMARK  —  record-once, replay-forever")
+    print()
+    print(f"  Recordings dir : {RECORDINGS_DIR.relative_to(ROOT)}")
+    print(f"  Config snapshot:")
+    print(
+        f"    PAUSE_SECONDS    = {c(Fore.CYAN, PAUSE_SECONDS)}   ← adds this to every utterance"
+    )
+    print(f"    SILERO_THRESHOLD = {c(Fore.CYAN, SILERO_THRESHOLD)}")
+    print(f"    TRANSCRIBE_EVERY = {c(Fore.CYAN, TRANSCRIBE_EVERY)}")
+    print(
+        f"    WHISPER_MODEL    = {c(Fore.CYAN, __import__('config.whisper', fromlist=['WHISPER_MODEL_NAME']).WHISPER_MODEL_NAME)}"
+    )
+    rule()
+
+    # load whisper
+    print(f"\n  Loading Whisper...")
+    get_model()
+    ok("Whisper ready")
+    # warm up scipy resampler — kills JIT hit on first sentence
+    resample(
+        np.zeros(int(RECORD_SAMPLE_RATE * 0.02), dtype=np.float32),
+        RECORD_SAMPLE_RATE,
+        WHISPER_SAMPLE_RATE,
+    )
+    ok("Resampler warmed up")
+
+    results: list[dict] = [None] * len(SENTENCES)
+
+    for idx in indices:
+        sentence = SENTENCES[idx]
+        path = wav_path(idx)
+
+        # decide: record or load
+        if args.replay and not path.exists():
+            warn(f"[{idx+1}] No recording found at {path.name} — skipping")
+            continue
+
+        if args.record or not path.exists():
+            # record mode
+            if args.replay:
+                warn(f"[{idx+1}] --replay set but no file — skipping")
+                continue
+            if not path.exists():
+                info(f"[{idx+1}] No recording found — recording now")
+            audio = record_sentence(idx, sentence)
+        else:
+            info(f"[{idx+1}] Loading saved recording: {path.name}")
+            audio = load_sentence(idx)
+
+        # benchmark
+        r = benchmark_sentence(idx, audio)
+        results[idx] = r
+        print_result(idx, r)
+        rule()
+
+    # summary over completed results
+    completed = [r for r in results if r is not None]
+    if len(completed) > 1:
+        print_summary(completed)
+    elif len(completed) == 1:
+        # single sentence — still show estimate
+        r = completed[0]
+        pause_ms = PAUSE_SECONDS * 1000
+        est = pause_ms + r["whisper_ms"]
+        print(
+            f"\n  Felt latency estimate: {pause_ms:.0f}ms (pause) + {r['whisper_ms']:.0f}ms (whisper) = {c(Fore.CYAN, f'{est:.0f}ms')}"
+        )
+
+
+if __name__ == "__main__":
+    main()
+
+```
+
+### tests/benchmark_tts.py
+
+```python
+"""
+tests/benchmark_tts.py
+======================
+Full end-to-end pipeline benchmark: WAV → Whisper → LLM → TTS → playback
+
+Mirrors _run_full() in main.py exactly, but:
+  - Feeds pre-recorded WAVs instead of live mic (uses tests/recordings/)
+  - Captures every latency segment
+  - Measures TTS smoothness: chunk count, inter-chunk gaps, words-per-chunk
+  - Prints a colour-coded report with diagnosis + tuning advice
+
+Usage:
+    python tests/benchmark_tts.py                  # all 10 sentences
+    python tests/benchmark_tts.py --sentence 3     # only sentence #3
+    python tests/benchmark_tts.py --no-audio       # skip actual playback (latency only)
+    python tests/benchmark_tts.py --no-llm         # feed fixed text directly to TTS
+    python tests/benchmark_tts.py --steps 8        # override TTS diffusion steps
+    python tests/benchmark_tts.py --tts-text "Hello world, this is a test."
+
+Pre-requisite: run benchmark_stt.py first so tests/recordings/ exists.
+"""
+
+import sys
+import time
+import argparse
+import threading
+from pathlib import Path
+from dataclasses import dataclass, field
+
+ROOT = Path(__file__).parent.parent
+sys.path.insert(0, str(ROOT))
+
+import numpy as np
+import soundfile as sf
+from colorama import Fore, Style, init as colorama_init
+
+colorama_init()
+
+from config.vad import RECORD_SAMPLE_RATE, PAUSE_SECONDS
+from config.whisper import WHISPER_SAMPLE_RATE
+from config.tts import (
+    SUPERTONIC_VOICE,
+    SUPERTONIC_SPEED,
+    SUPERTONIC_STEPS,
+    SUPERTONIC_LANGUAGE,
+)
+
+RECORDINGS_DIR = ROOT / "tests" / "recordings"
+
+SENTENCES = [
+    "open the calendar and show me this week",
+    "what is the weather like today",
+    "set a reminder for tomorrow at nine am",
+    "send a message to John saying I will be late",
+    "search the web for latest AI news",
+    "turn off the lights in the living room",
+    "call mom when you get a chance",
+    "how long does it take to drive to the airport",
+    "play some music on spotify",
+    "the quick brown fox jumps over the lazy dog",
+]
+
+
+# ─────────────────────────────────────────────────────────────
+# Terminal helpers
+# ─────────────────────────────────────────────────────────────
+
+
+def c(color, msg):
+    return f"{color}{msg}{Style.RESET_ALL}"
+
+
+def ok(m):
+    print(f"  {c(Fore.GREEN,  '✓')}  {m}")
+
+
+def fail(m):
+    print(f"  {c(Fore.RED,    '✗')}  {m}")
+
+
+def info(m):
+    print(f"  {c(Fore.CYAN,   '→')}  {m}")
+
+
+def warn(m):
+    print(f"  {c(Fore.YELLOW, '!')}  {m}")
+
+
+def head(m):
+    print(f"\n  {c(Fore.YELLOW + Style.BRIGHT, m)}")
+
+
+def rule():
+    print(f"  {'─' * 66}")
+
+
+def ms_c(ms, green=300, yellow=700):
+    return Fore.GREEN if ms < green else Fore.YELLOW if ms < yellow else Fore.RED
+
+
+def tag(label, val, color=Fore.WHITE):
+    print(f"  {label:<36} {c(color, val)}")
+
+
+# ─────────────────────────────────────────────────────────────
+# Result container
+# ─────────────────────────────────────────────────────────────
+
+
+@dataclass
+class BenchResult:
+    sentence_idx: int
+    input_text: str
+    stt_text: str = ""
+    llm_text: str = ""
+
+    stt_ms: float = 0.0
+    llm_first_token_ms: float = 0.0
+    llm_total_ms: float = 0.0
+    tts_first_chunk_ms: float = 0.0
+    tts_total_ms: float = 0.0
+    e2e_ms: float = 0.0
+
+    chunk_count: int = 0
+    chunk_sizes_words: list = field(default_factory=list)
+    chunk_gen_times_ms: list = field(default_factory=list)
+    inter_chunk_gaps_ms: list = field(default_factory=list)
+
+    filler_text: str = ""
+    filler_gen_ms: float = 0.0
+    filler_duration_ms: float = 0.0
+    filler_covers_llm: bool = False
+
+    stt_passed: bool = True
+    error: str = ""
+
+
+# ─────────────────────────────────────────────────────────────
+# Instrumented TTS engine
+# ─────────────────────────────────────────────────────────────
+
+
+class InstrumentedTTSEngine:
+    def __init__(self, voice, speed, steps, language, play_fn):
+        self.voice = voice
+        self.speed = speed
+        self.steps = steps
+        self.language = language
+        self.play_fn = play_fn
+        self._chunks: list[str] = []
+
+    def enqueue(self, text: str):
+        if text.strip():
+            self._chunks.append(text.strip())
+
+    def run(self) -> dict:
+        from tts.generate.pipeline import generate_one
+        from tts.model.singleton import get_model
+        from tts.text.clean import clean_markdown
+
+        sr = get_model()["sample_rate"]
+        chunk_gen_times, inter_chunk_gaps = [], []
+        prev_end = None
+        total_start = time.perf_counter()
+
+        for text in self._chunks:
+            cleaned = clean_markdown(text)
+            if not cleaned:
+                continue
+            if prev_end is not None:
+                inter_chunk_gaps.append((time.perf_counter() - prev_end) * 1000)
+
+            t0 = time.perf_counter()
+            audio = generate_one(
+                cleaned,
+                voice=self.voice,
+                speed=self.speed,
+                steps=self.steps,
+                language=self.language,
+            )
+            gen_ms = (time.perf_counter() - t0) * 1000
+            chunk_gen_times.append(gen_ms)
+            self.play_fn(audio, sr)
+            prev_end = time.perf_counter()
+
+        return {
+            "chunk_count": len(self._chunks),
+            "chunk_sizes_words": [len(ch.split()) for ch in self._chunks],
+            "chunk_gen_times_ms": chunk_gen_times,
+            "inter_chunk_gaps_ms": inter_chunk_gaps,
+            "tts_first_chunk_ms": chunk_gen_times[0] if chunk_gen_times else 0.0,
+            "tts_total_ms": (time.perf_counter() - total_start) * 1000,
+        }
+
+
+# ─────────────────────────────────────────────────────────────
+# Feed LLM tokens to engine (mirrors optimised feed.py)
+# ─────────────────────────────────────────────────────────────
+
+
+def feed_tokens_to_engine(engine: InstrumentedTTSEngine, token_gen) -> tuple:
+    from tts.text.split import split_sentence, MIN_CHUNK_CHARS
+
+    WORD_FLUSH_THRESHOLD = 6
+    MIN_SEND_CHARS = 20
+
+    buf, full = "", ""
+    first_token_ms = None
+    t_start = time.perf_counter()
+
+    for token in token_gen:
+        if first_token_ms is None:
+            first_token_ms = (time.perf_counter() - t_start) * 1000
+        buf += token
+        full += token
+
+        while True:
+            sentence, remainder = split_sentence(buf)
+            if sentence and len(sentence) >= MIN_SEND_CHARS:
+                engine.enqueue(sentence)
+                buf = remainder
+            else:
+                break
+
+        if len(buf.split()) >= WORD_FLUSH_THRESHOLD:
+            engine.enqueue(buf.strip())
+            buf = ""
+
+    if buf.strip() and len(buf.strip()) >= 2:
+        engine.enqueue(buf.strip())
+
+    llm_total_ms = (time.perf_counter() - t_start) * 1000
+    return full, first_token_ms or llm_total_ms, llm_total_ms
+
+
+# ─────────────────────────────────────────────────────────────
+# STT
+# ─────────────────────────────────────────────────────────────
+
+
+def run_stt(wav_path: Path) -> tuple:
+    from audio.transform.resample import resample
+    from audio.transform.normalise import normalise
+    from transcription.model.singleton import get_model
+    from transcription.model.lock import infer_lock
+    from transcription.hallucination.confidence import passes_confidence
+    from transcription.hallucination.noise import clean_text
+    from transcription.hallucination.repetition import has_repetition
+    from transcription.transcribe.options import build_whisper_options
+    import whisper as _whisper
+
+    audio, sr = sf.read(str(wav_path), dtype="float32")
+    if audio.ndim > 1:
+        audio = audio[:, 0]
+    if sr != RECORD_SAMPLE_RATE:
+        audio = resample(audio, sr, RECORD_SAMPLE_RATE)
+    audio_16k = resample(audio, RECORD_SAMPLE_RATE, WHISPER_SAMPLE_RATE)
+    audio_16k = normalise(audio_16k)
+
+    model = get_model()
+    opts = build_whisper_options()
+    t0 = time.perf_counter()
+    with infer_lock:
+        result = _whisper.transcribe(model, audio_16k, **opts)
+    stt_ms = (time.perf_counter() - t0) * 1000
+
+    passed = passes_confidence(result)
+    text = ""
+    if passed:
+        raw = clean_text(result.get("text", ""))
+        if raw and not has_repetition(raw):
+            text = raw
+    return text, stt_ms, passed
+
+
+# ─────────────────────────────────────────────────────────────
+# Full pipeline for one sentence
+# ─────────────────────────────────────────────────────────────
+
+
+def benchmark_one(idx: int, args, play_fn) -> BenchResult:
+    r = BenchResult(sentence_idx=idx, input_text=SENTENCES[idx])
+    wav = RECORDINGS_DIR / f"sentence_{idx+1:02d}.wav"
+
+    if not wav.exists():
+        r.error = f"No recording at {wav.name} — run benchmark_stt.py first"
+        return r
+
+    e2e_start = time.perf_counter()
+
+    # ── STT ─────────────────────────────────────────────────
+    if args.no_llm and args.tts_text:
+        r.stt_text = args.tts_text
+    else:
+        try:
+            r.stt_text, r.stt_ms, r.stt_passed = run_stt(wav)
+        except Exception as e:
+            r.error = f"STT error: {e}"
+            return r
+        if not r.stt_text:
+            r.error = "STT: no transcript"
+            return r
+
+    # ── Filler measurement ───────────────────────────────────
+    try:
+        from tts.generate.pipeline import generate_one
+        from tts.model.singleton import get_model
+
+        # Pick the longest filler to test coverage
+        from tts.engine.state import _FILLERS
+
+        filler_text = max(_FILLERS, key=len)
+        r.filler_text = filler_text
+        t_fil = time.perf_counter()
+        filler_audio = generate_one(
+            filler_text,
+            voice=args.voice,
+            speed=args.speed,
+            steps=args.steps,
+            language=args.language,
+        )
+        r.filler_gen_ms = (time.perf_counter() - t_fil) * 1000
+        sr = get_model()["sample_rate"]
+        r.filler_duration_ms = len(filler_audio) / sr * 1000
+    except Exception as e:
+        warn(f"Filler measurement failed: {e}")
+
+    # ── LLM + TTS feed ──────────────────────────────────────
+    engine = InstrumentedTTSEngine(
+        voice=args.voice,
+        speed=args.speed,
+        steps=args.steps,
+        language=args.language,
+        play_fn=play_fn,
+    )
+
+    if args.no_llm:
+
+        def _fixed():
+            for w in (args.tts_text or r.stt_text).split():
+                yield w + " "
+
+        token_gen = _fixed()
+    else:
+        from llm.inference.stream import stream_response
+        from llm.history.state import create_history
+
+        token_gen = stream_response(r.stt_text, create_history())
+
+    try:
+        r.llm_text, r.llm_first_token_ms, r.llm_total_ms = feed_tokens_to_engine(
+            engine, token_gen
+        )
+    except Exception as e:
+        r.error = f"LLM error: {e}"
+        return r
+
+    # ── TTS generation ───────────────────────────────────────
+    try:
+        tts_info = engine.run()
+    except Exception as e:
+        r.error = f"TTS error: {e}"
+        return r
+
+    r.chunk_count = tts_info["chunk_count"]
+    r.chunk_sizes_words = tts_info["chunk_sizes_words"]
+    r.chunk_gen_times_ms = tts_info["chunk_gen_times_ms"]
+    r.inter_chunk_gaps_ms = tts_info["inter_chunk_gaps_ms"]
+    r.tts_first_chunk_ms = tts_info["tts_first_chunk_ms"]
+    r.tts_total_ms = tts_info["tts_total_ms"]
+    r.e2e_ms = (time.perf_counter() - e2e_start) * 1000
+    r.filler_covers_llm = r.filler_duration_ms >= r.llm_first_token_ms
+
+    return r
+
+
+# ─────────────────────────────────────────────────────────────
+# Print one result
+# ─────────────────────────────────────────────────────────────
+
+
+def print_result(r: BenchResult, args) -> None:
+    n = r.sentence_idx + 1
+    print(f"\n  [{n}] {c(Fore.CYAN, r.input_text)}")
+    if r.error:
+        fail(r.error)
+        return
+
+    if not args.no_llm:
+        print(f"       STT : {c(Fore.WHITE, r.stt_text or '(empty)')}")
+    llm_preview = r.llm_text[:110] + ("…" if len(r.llm_text) > 110 else "")
+    print(f"       LLM : {c(Fore.WHITE, llm_preview)}")
+    print()
+
+    rule()
+    if not args.no_llm:
+        tag("STT (Whisper)", f"{r.stt_ms:.0f} ms", ms_c(r.stt_ms, 600, 1200))
+    tag(
+        "LLM → first token",
+        f"{r.llm_first_token_ms:.0f} ms",
+        ms_c(r.llm_first_token_ms, 500, 1500),
+    )
+    tag(
+        "LLM → full response",
+        f"{r.llm_total_ms:.0f} ms",
+        ms_c(r.llm_total_ms, 800, 2000),
+    )
+
+    if r.filler_duration_ms:
+        cover = (
+            "✓ covers LLM"
+            if r.filler_covers_llm
+            else f"✗ {r.llm_first_token_ms - r.filler_duration_ms:.0f}ms gap"
+        )
+        fil_color = Fore.GREEN if r.filler_covers_llm else Fore.RED
+        tag(
+            f"Filler ({r.filler_text!r})",
+            f"{r.filler_duration_ms:.0f} ms  [{cover}]",
+            fil_color,
+        )
+
+    tag(
+        "TTS first chunk generation",
+        f"{r.tts_first_chunk_ms:.0f} ms",
+        ms_c(r.tts_first_chunk_ms, 300, 700),
+    )
+    tag(
+        "TTS total generation",
+        f"{r.tts_total_ms:.0f} ms",
+        ms_c(r.tts_total_ms, 2000, 5000),
+    )
+
+    if not args.no_llm:
+        tag("End-to-end", f"{r.e2e_ms:.0f} ms", ms_c(r.e2e_ms, 4000, 8000))
+    rule()
+
+    print(f"\n  TTS Smoothness")
+    rule()
+    tag(
+        "Chunks generated",
+        str(r.chunk_count),
+        (
+            Fore.GREEN
+            if r.chunk_count <= 4
+            else Fore.YELLOW if r.chunk_count <= 7 else Fore.RED
+        ),
+    )
+
+    if r.chunk_sizes_words:
+        avg_w = sum(r.chunk_sizes_words) / len(r.chunk_sizes_words)
+        tag(
+            "Avg words per chunk",
+            f"{avg_w:.1f}",
+            Fore.GREEN if avg_w >= 5 else Fore.YELLOW if avg_w >= 3 else Fore.RED,
+        )
+        tag("Chunk word distribution", str(r.chunk_sizes_words))
+
+    if r.chunk_gen_times_ms:
+        avg_gen = sum(r.chunk_gen_times_ms) / len(r.chunk_gen_times_ms)
+        tag("Avg chunk gen time", f"{avg_gen:.0f} ms", ms_c(avg_gen, 300, 600))
+        tag(
+            "Per-chunk gen times (ms)",
+            "  ".join(f"{v:.0f}" for v in r.chunk_gen_times_ms),
+        )
+
+    if r.inter_chunk_gaps_ms:
+        avg_gap = sum(r.inter_chunk_gaps_ms) / len(r.inter_chunk_gaps_ms)
+        max_gap = max(r.inter_chunk_gaps_ms)
+        tag(
+            "Avg / max inter-chunk gap",
+            f"{avg_gap:.0f} ms / {max_gap:.0f} ms",
+            Fore.GREEN if max_gap < 60 else Fore.YELLOW if max_gap < 150 else Fore.RED,
+        )
+    rule()
+
+
+# ─────────────────────────────────────────────────────────────
+# Summary
+# ─────────────────────────────────────────────────────────────
+
+
+def print_summary(results: list[BenchResult], args) -> None:
+    good = [r for r in results if not r.error and r.chunk_count > 0]
+    if not good:
+        warn("No successful results.")
+        return
+
+    head("SUMMARY")
+    print()
+    rule()
+
+    def avg(vals):
+        return sum(vals) / len(vals) if vals else 0
+
+    stt_vals = [r.stt_ms for r in good]
+    ft_vals = [r.llm_first_token_ms for r in good]
+    llm_vals = [r.llm_total_ms for r in good]
+    tts1_vals = [r.tts_first_chunk_ms for r in good]
+    ttst_vals = [r.tts_total_ms for r in good]
+    e2e_vals = [r.e2e_ms for r in good]
+    gap_vals = [g for r in good for g in r.inter_chunk_gaps_ms]
+    fil_vals = [r.filler_duration_ms for r in good if r.filler_duration_ms]
+    cw_vals = [w for r in good for w in r.chunk_sizes_words]
+
+    if stt_vals and not args.no_llm:
+        a = avg(stt_vals)
+        tag("STT avg", f"{a:.0f} ms", ms_c(a, 600, 1200))
+    if ft_vals:
+        a = avg(ft_vals)
+        tag("LLM first token avg", f"{a:.0f} ms", ms_c(a, 500, 1500))
+    if llm_vals:
+        a = avg(llm_vals)
+        tag("LLM total avg", f"{a:.0f} ms", ms_c(a, 800, 2000))
+    if fil_vals:
+        a = avg(fil_vals)
+        tag("Filler duration avg", f"{a:.0f} ms")
+    if tts1_vals:
+        a = avg(tts1_vals)
+        tag("TTS first chunk avg", f"{a:.0f} ms", ms_c(a, 300, 700))
+    if ttst_vals:
+        a = avg(ttst_vals)
+        tag("TTS total avg", f"{a:.0f} ms", ms_c(a, 2000, 5000))
+    if cw_vals:
+        a = avg(cw_vals)
+        tag(
+            "Avg words/chunk",
+            f"{a:.1f}",
+            Fore.GREEN if a >= 5 else Fore.YELLOW if a >= 3 else Fore.RED,
+        )
+    if gap_vals:
+        a = avg(gap_vals)
+        mx = max(gap_vals)
+        tag(
+            "Inter-chunk gap avg/max",
+            f"{a:.0f} ms / {mx:.0f} ms",
+            Fore.GREEN if mx < 60 else Fore.YELLOW,
+        )
+    if e2e_vals and not args.no_llm:
+        a = avg(e2e_vals)
+        tag("End-to-end avg", f"{a:.0f} ms", ms_c(a, 4000, 8000))
+    rule()
+
+    head("DIAGNOSIS & TUNING ADVICE")
+    print()
+    any_rec = False
+
+    # TTS first chunk
+    if tts1_vals:
+        a = avg(tts1_vals)
+        if a > 700:
+            warn(
+                f"TTS first chunk slow ({a:.0f}ms). "
+                f"Reduce SUPERTONIC_STEPS: currently {args.steps}, try {max(6, args.steps - 3)}"
+            )
+            any_rec = True
+        elif a > 300:
+            warn(
+                f"TTS first chunk moderate ({a:.0f}ms). "
+                f"Try steps={max(6, args.steps - 2)} to cut ~30%"
+            )
+            any_rec = True
+        else:
+            ok(f"TTS first chunk fast ({a:.0f}ms)")
+
+    # Chunk fragmentation
+    if cw_vals:
+        a = avg(cw_vals)
+        counts = [r.chunk_count for r in good]
+        ac = avg(counts)
+        if a < 3:
+            warn(
+                f"Avg {a:.1f} words/chunk ({ac:.1f} chunks/response) — "
+                f"too fragmented, each chunk wastes ~350ms ONNX overhead. "
+                f"Raise WORD_FLUSH_THRESHOLD in tts/engine/feed.py"
+            )
+            any_rec = True
+        elif a >= 5:
+            ok(f"Chunk size good ({a:.1f} words avg, {ac:.1f} chunks/response)")
+        else:
+            warn(f"Chunks borderline ({a:.1f} words avg). Aim for 6+ words/chunk")
+            any_rec = True
+
+    # Filler coverage
+    if fil_vals and ft_vals:
+        avg_fil = avg(fil_vals)
+        avg_ft = avg(ft_vals)
+        if avg_fil >= avg_ft * 0.9:
+            ok(f"Filler ({avg_fil:.0f}ms) covers LLM first-token ({avg_ft:.0f}ms)")
+        else:
+            gap = avg_ft - avg_fil
+            warn(
+                f"Filler ({avg_fil:.0f}ms) shorter than LLM first-token ({avg_ft:.0f}ms) "
+                f"— {gap:.0f}ms silence gap. Longer fillers added to state.py fix this."
+            )
+            any_rec = True
+
+    # LLM speed
+    if ft_vals:
+        a = avg(ft_vals)
+        if a > 1500:
+            warn(
+                f"LLM first token {a:.0f}ms — try GPU_LAYERS=36 (max) in config/llm.py "
+                f"or a smaller model (qwen2.5-1.5b)"
+            )
+            any_rec = True
+
+    if not any_rec:
+        ok("Pipeline is well tuned!")
+
+    head("NUMBERS TO PASTE")
+    print()
+    print(f"  voice={args.voice}  speed={args.speed}  steps={args.steps}")
+    if tts1_vals:
+        print(
+            f"  tts_first_chunk_avg={avg(tts1_vals):.0f}ms  tts_total_avg={avg(ttst_vals):.0f}ms"
+        )
+    if cw_vals:
+        print(
+            f"  words_per_chunk_avg={avg(cw_vals):.1f}  chunk_count_avg={avg([r.chunk_count for r in good]):.1f}"
+        )
+    if ft_vals:
+        print(
+            f"  llm_first_token_avg={avg(ft_vals):.0f}ms  llm_total_avg={avg(llm_vals):.0f}ms"
+        )
+    if fil_vals:
+        print(f"  filler_duration_avg={avg(fil_vals):.0f}ms")
+    if e2e_vals:
+        print(f"  e2e_avg={avg(e2e_vals):.0f}ms")
+    print()
+
+
+# ─────────────────────────────────────────────────────────────
+# Main
+# ─────────────────────────────────────────────────────────────
+
+
+def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--sentence", type=int, default=0)
+    parser.add_argument("--no-audio", action="store_true")
+    parser.add_argument("--no-llm", action="store_true")
+    parser.add_argument("--tts-text", type=str, default="")
+    parser.add_argument("--steps", type=int, default=SUPERTONIC_STEPS)
+    parser.add_argument("--voice", type=str, default=SUPERTONIC_VOICE)
+    parser.add_argument("--speed", type=float, default=SUPERTONIC_SPEED)
+    parser.add_argument("--language", type=str, default=SUPERTONIC_LANGUAGE)
+    args = parser.parse_args()
+
+    if args.tts_text:
+        args.no_llm = True
+
+    head("FULL PIPELINE TTS BENCHMARK")
+    print()
+    print(f"  Recordings : {RECORDINGS_DIR.relative_to(ROOT)}")
+    print(f"  Mode       : {'TTS-only' if args.no_llm else 'STT → LLM → TTS'}")
+    print(f"  Playback   : {'disabled' if args.no_audio else 'enabled'}")
+    print(f"  TTS config : voice={args.voice}  speed={args.speed}  steps={args.steps}")
+    rule()
+    print()
+
+    if not args.no_llm:
+        print("  Loading Whisper...")
+        from transcription.model.singleton import get_model as load_whisper
+
+        load_whisper()
+        ok("Whisper ready")
+        print("  Loading LLM...")
+        from llm.model.singleton import get_model as load_llm
+
+        load_llm()
+        ok("LLM ready")
+
+    print("  Loading TTS model...")
+    from tts.model.singleton import get_model as load_tts
+
+    load_tts()
+    ok("TTS ready")
+
+    print("  Warming up TTS...")
+    from tts.generate.pipeline import generate_one
+
+    _ = generate_one(
+        "Warming up.",
+        voice=args.voice,
+        speed=args.speed,
+        steps=args.steps,
+        language=args.language,
+    )
+    ok("TTS warmed up")
+    print()
+
+    play_fn = (
+        (lambda a, sr: None)
+        if args.no_audio
+        else __import__("tts.playback.stream", fromlist=["play_audio"]).play_audio
+    )
+
+    indices = [args.sentence - 1] if args.sentence else list(range(len(SENTENCES)))
+    results: list[BenchResult] = []
+
+    for idx in indices:
+        print(f"\n  Running [{idx+1}/{len(SENTENCES)}]: {c(Fore.CYAN, SENTENCES[idx])}")
+        r = benchmark_one(idx, args, play_fn)
+        results.append(r)
+        print_result(r, args)
+        rule()
+
+    completed = [r for r in results if not r.error]
+    if len(completed) > 1:
+        print_summary(completed, args)
+    elif len(completed) == 1:
+        r = completed[0]
+        print(f"\n  TTS first chunk : {r.tts_first_chunk_ms:.0f} ms")
+        print(f"  TTS total       : {r.tts_total_ms:.0f} ms")
+        print(f"  Chunks          : {r.chunk_count}  ({r.chunk_sizes_words})")
+
+
+if __name__ == "__main__":
+    main()
+
+```
+
+### tests/recordings/sentence_01.wav
+
+(Skipped: binary or unreadable file)
+
+
+### tests/recordings/sentence_02.wav
+
+(Skipped: binary or unreadable file)
+
+
+### tests/recordings/sentence_03.wav
+
+(Skipped: binary or unreadable file)
+
+
+### tests/recordings/sentence_04.wav
+
+(Skipped: binary or unreadable file)
+
+
+### tests/recordings/sentence_05.wav
+
+(Skipped: binary or unreadable file)
+
+
+### tests/recordings/sentence_06.wav
+
+(Skipped: binary or unreadable file)
+
+
+### tests/recordings/sentence_07.wav
+
+(Skipped: binary or unreadable file)
+
+
+### tests/recordings/sentence_08.wav
+
+(Skipped: binary or unreadable file)
+
+
+### tests/recordings/sentence_09.wav
+
+(Skipped: binary or unreadable file)
+
+
+### tests/recordings/sentence_10.wav
+
+(Skipped: binary or unreadable file)
+
+
 ### transcription/__init__.py
 
 ```python
+# transcription/__init__.py
 from transcription.model.singleton import get_model, is_loaded
 from transcription.transcribe.batch import transcribe_audio
 from transcription.stream import (
@@ -2416,6 +3558,7 @@ from transcription.download.whisper import ensure_downloaded
 ### transcription/download/whisper.py
 
 ```python
+# transcription/download/whisper.py
 from config.paths import WHISPER_DIR
 from config.whisper import WHISPER_MODEL_NAME
 
@@ -2453,6 +3596,7 @@ if __name__ == "__main__":
 ### transcription/hallucination/__init__.py
 
 ```python
+# transcription/hallucination/__init__.py
 from transcription.hallucination.repetition import has_repetition
 from transcription.hallucination.noise import is_noise_phrase, clean_text
 from transcription.hallucination.confidence import passes_confidence
@@ -2462,6 +3606,7 @@ from transcription.hallucination.confidence import passes_confidence
 ### transcription/hallucination/confidence.py
 
 ```python
+# transcription/hallucination/confidence.py
 from config.vad import NO_SPEECH_THRESHOLD
 
 
@@ -2483,6 +3628,7 @@ if __name__ == "__main__":
 ### transcription/hallucination/noise.py
 
 ```python
+#
 import re
 
 _PATTERNS = [
@@ -2513,6 +3659,7 @@ if __name__ == "__main__":
 ### transcription/hallucination/repetition.py
 
 ```python
+#
 REPETITION_MIN_WORDS = 4
 REPETITION_COUNT_THRESHOLD = 3
 
@@ -2546,6 +3693,7 @@ if __name__ == "__main__":
 ### transcription/model/__init__.py
 
 ```python
+# transcription/model/__init__.py
 from transcription.model.singleton import get_model, is_loaded, reset
 from transcription.model.device import resolve_device
 from transcription.model.lock import infer_lock
@@ -2555,6 +3703,7 @@ from transcription.model.lock import infer_lock
 ### transcription/model/device.py
 
 ```python
+# transcription/model/device.py
 import torch
 
 
@@ -2574,6 +3723,7 @@ if __name__ == "__main__":
 ### transcription/model/load.py
 
 ```python
+# transcription/model/load.py
 import torch
 import whisper
 import whisper.model as wm
@@ -2600,6 +3750,20 @@ def load_whisper(
     model = wm.Whisper(dims)
     model.load_state_dict(checkpoint["model_state_dict"])
     model = model.to(device)
+
+    # warm up Metal kernels — kills the 5s cold-start on first real call
+    print("[Whisper] Warming up...")
+    import whisper as _w
+    import numpy as np
+
+    # 480000 = 30s at 16kHz — Whisper's full window
+    # pre-compiles the Metal kernel for the largest possible input
+    _w.transcribe(
+        model,
+        np.zeros(480000, dtype=np.float32),
+        language="en",
+        fp16=(device == "cuda"),
+    )
     print(f"[Whisper] Ready on {device}.")
     return model
 
@@ -2613,6 +3777,7 @@ if __name__ == "__main__":
 ### transcription/model/lock.py
 
 ```python
+# transcription/model/lock.py
 import threading
 
 # Single lock shared by all Whisper callers — GPU is not re-entrant
@@ -2623,6 +3788,7 @@ infer_lock = threading.Lock()
 ### transcription/model/singleton.py
 
 ```python
+# transcription/model/singleton.py
 import threading
 from typing import Optional
 import whisper.model as wm
@@ -2657,6 +3823,7 @@ def reset():
 ### transcription/stream/__init__.py
 
 ```python
+# transcription/stream/__init__.py
 from transcription.stream.buffer import create_buffer
 from transcription.stream.worker import start_worker, stop_worker
 from transcription.stream.final import run_final_pass
@@ -2670,6 +3837,7 @@ def create_stream(on_partial, on_final, sample_rate: int = 16000) -> dict:
         "last_text": "",
         "running": False,
         "worker_thread": None,
+        "is_transcribing": False,
     }
 
 
@@ -2706,6 +3874,8 @@ def clear_stream(state: dict) -> None:
 ### transcription/stream/buffer.py
 
 ```python
+# transcription/stream/buffer.py
+
 import threading
 import numpy as np
 
@@ -2745,6 +3915,7 @@ def _cap(buf: dict) -> None:
 ### transcription/stream/final.py
 
 ```python
+# transcription/stream/final.py
 import threading
 import numpy as np
 import whisper
@@ -2793,6 +3964,7 @@ if __name__ == "__main__":
 ### transcription/stream/partial.py
 
 ```python
+# transcription/stream/partial.py
 import threading
 import numpy as np
 import whisper
@@ -2835,7 +4007,6 @@ def _transcribe(audio: np.ndarray) -> str:
 ```python
 import threading
 import time
-
 from config.vad import TRANSCRIBE_EVERY
 
 
@@ -2857,18 +4028,32 @@ def stop_worker(state: dict) -> None:
 def _loop(state: dict) -> None:
     while state["running"]:
         time.sleep(TRANSCRIBE_EVERY)
+        # Don't skip — just run in a thread so the loop stays on schedule
+        if state["is_transcribing"]:
+            continue
+        threading.Thread(target=_run_partial, args=(state,), daemon=True).start()
+
+
+def _run_partial(state: dict) -> None:
+    if state["is_transcribing"]:
+        return
+    state["is_transcribing"] = True
+    try:
         from transcription.stream.partial import run_partial_pass
 
         text = run_partial_pass(state["buf"])
         if text and text != state["last_text"]:
             state["last_text"] = text
             state["on_partial"](text)
+    finally:
+        state["is_transcribing"] = False
 
 ```
 
 ### transcription/transcribe/__init__.py
 
 ```python
+# transcription/transcribe/__init__.py
 from transcription.transcribe.batch import transcribe_audio
 from transcription.transcribe.options import build_whisper_options
 
@@ -2877,6 +4062,7 @@ from transcription.transcribe.options import build_whisper_options
 ### transcription/transcribe/batch.py
 
 ```python
+# transcription/transcribe/batch.py
 import time
 import threading
 
@@ -2923,6 +4109,7 @@ if __name__ == "__main__":
 ### transcription/transcribe/options.py
 
 ```python
+# transcription/options.py
 from config.vad import (
     NO_SPEECH_THRESHOLD,
     LOGPROB_THRESHOLD,
@@ -2953,15 +4140,18 @@ if __name__ == "__main__":
 ### transcription/vad/__init__.py
 
 ```python
+# transcription/vad/__init__.py
 from transcription.vad.state import create_vad_state, reset_vad_state
 from transcription.vad.processor import process_chunk
 from transcription.vad.energy import is_speech_energy
+from transcription.vad.silero import is_speech
 
 ```
 
 ### transcription/vad/energy.py
 
 ```python
+# transcription/vad/energy.py
 import numpy as np
 from config.vad import ENERGY_THRESHOLD
 from audio.gate.rms import rms
@@ -2987,10 +4177,11 @@ if __name__ == "__main__":
 ### transcription/vad/processor.py
 
 ```python
+# transcription/vad/processor.py
 import numpy as np
 from config.vad import PAUSE_SECONDS, MIN_SPEECH_SEC
 from transcription.vad.state import reset_vad_state
-from transcription.vad.energy import is_speech_energy
+from transcription.vad.silero import is_speech as _is_speech
 
 
 def process_chunk(
@@ -3001,7 +4192,7 @@ def process_chunk(
 ) -> None:
     pause_samples = int(PAUSE_SECONDS * state["sample_rate"])
     min_samples = int(MIN_SPEECH_SEC * state["sample_rate"])
-    is_speech = is_speech_energy(chunk)
+    is_speech = _is_speech(chunk, state["sample_rate"])
 
     if is_speech:
         if not state["in_speech"]:
@@ -3061,6 +4252,7 @@ if __name__ == "__main__":
 ### transcription/vad/session.py
 
 ```python
+# transcription/vad/session.py
 import numpy as np
 
 from audio.io.mic import open_mic
@@ -3079,6 +4271,9 @@ def run_mic_session(
     should_process_chunk=None,
 ) -> None:
     """Run interactive mic capture loop with VAD/preroll + Whisper resampling."""
+    # kills the 2s resampy JIT hit on first chunk
+    resample(np.zeros(882, dtype=np.float32), RECORD_SAMPLE_RATE, WHISPER_SAMPLE_RATE)
+
     preroll_target = int(PREROLL_SECONDS * RECORD_SAMPLE_RATE)
     preroll_chunks: list[np.ndarray] = []
     preroll_len = 0
@@ -3127,9 +4322,62 @@ def run_mic_session(
 
 ```
 
+### transcription/vad/silero.py
+
+```python
+import threading
+import numpy as np
+import torch
+from audio.transform.resample import resample
+from config.vad import SILERO_THRESHOLD
+
+_model = None
+_load_lock = threading.Lock()  # only for initial load
+_infer_lock = threading.Lock()  # only for inference
+_sample_rate = 16000
+_MIN_SAMPLES = 512
+_accumulator = np.array([], dtype=np.float32)
+
+
+def _get_model():
+    global _model
+    if _model is not None:
+        return _model
+    with _load_lock:
+        if _model is not None:
+            return _model
+        from silero_vad import load_silero_vad
+
+        _model = load_silero_vad()
+        _model.reset_states()
+    return _model
+
+
+def is_speech(chunk: np.ndarray, source_sr: int) -> bool:
+    global _accumulator
+    if len(chunk) == 0:
+        return False
+    audio = (
+        resample(chunk, source_sr, _sample_rate)
+        if source_sr != _sample_rate
+        else chunk.astype(np.float32)
+    )
+    _accumulator = np.concatenate([_accumulator, audio])
+    if len(_accumulator) < _MIN_SAMPLES:
+        return False
+    tensor = torch.from_numpy(_accumulator[:_MIN_SAMPLES]).float()
+    _accumulator = _accumulator[_MIN_SAMPLES:]
+    model = _get_model()
+    with _infer_lock:
+        prob = model(tensor, _sample_rate).item()
+    return prob >= SILERO_THRESHOLD
+
+```
+
 ### transcription/vad/state.py
 
 ```python
+# transcription/vad/state.py
 def create_vad_state(sample_rate: int = 16000) -> dict:
     return {
         "sample_rate": sample_rate,
@@ -3207,6 +4455,7 @@ if __name__ == "__main__":
 ### tts/engine/__init__.py
 
 ```python
+# tts/engine/__init__.py
 from tts.engine.state import create_engine
 from tts.engine.worker import start_worker
 from tts.engine.feed import feed_token, flush
@@ -3218,11 +4467,11 @@ from tts.engine.status import is_speaking, wait_until_done, shutdown
 ### tts/engine/control.py
 
 ```python
-import random
+# tts/engine/control.py
+import threading
 
 
 def interrupt(engine: dict) -> None:
-    """Stop playback and drain pending queue."""
     engine["interrupted"].set()
     _drain(engine)
     from tts.playback.stop import stop_audio
@@ -3231,16 +4480,64 @@ def interrupt(engine: dict) -> None:
 
 
 def resume(engine: dict) -> None:
-    """Clear interrupted flag before next feed_token()."""
     engine["token_buf"] = ""
     engine["interrupted"].clear()
 
 
 def speak_filler(engine: dict) -> None:
-    """Enqueue a random filler at priority 0 (plays immediately)."""
-    from tts.engine.queue import enqueue
+    """
+    Play a cached filler non-blocking.
 
-    enqueue(engine, random.choice(engine["fillers"]), priority=0)
+    Selection strategy: pick the shortest filler whose measured duration is
+    >= the rolling LLM first-token estimate. This means:
+      - Filler ends at roughly the same time the first LLM token arrives
+      - No silent gap, no unnecessary extra wait
+      - Falls back to longest available if all fillers are shorter than estimate
+
+    Uses engine["last_llm_first_token_ms"] (EMA updated by record_llm_latency).
+    """
+    cached = engine["filler_audio"]
+    durations = engine["filler_durations_ms"]
+
+    if not cached:
+        return  # warmup not done yet — skip
+
+    target_ms = engine.get("last_llm_first_token_ms", 1800.0)
+
+    # Find all fillers that cover the target (duration >= target)
+    covering = {t: d for t, d in durations.items() if t in cached and d >= target_ms}
+
+    if covering:
+        # Pick the shortest one that still covers — minimises unnecessary wait
+        text = min(covering, key=covering.get)
+    else:
+        # All fillers are shorter than LLM latency — pick the longest available
+        text = max((t for t in cached), key=lambda t: durations.get(t, 0))
+
+    audio = cached[text]
+    engine["speaking"].set()
+
+    def _play():
+        try:
+            from tts.playback.stream import play_audio
+            from tts.model.singleton import get_model
+
+            play_audio(audio, get_model()["sample_rate"])
+        finally:
+            engine["speaking"].clear()
+
+    # Non-blocking — caller returns immediately, LLM starts streaming in parallel
+    threading.Thread(target=_play, daemon=True).start()
+
+
+def record_llm_latency(engine: dict, first_token_ms: float) -> None:
+    """
+    Update the rolling EMA of LLM first-token latency after each response.
+    alpha=0.25: slow enough to smooth spikes, fast enough to track trends.
+    speak_filler() uses this to pick the right filler duration next time.
+    """
+    prev = engine.get("last_llm_first_token_ms", first_token_ms)
+    engine["last_llm_first_token_ms"] = 0.75 * prev + 0.25 * first_token_ms
 
 
 def _drain(engine: dict) -> None:
@@ -3255,24 +4552,29 @@ def _drain(engine: dict) -> None:
 ### tts/engine/feed.py
 
 ```python
+# tts/engine/feed.py
 from tts.text.split import split_sentence, MIN_CHUNK_CHARS
 from tts.engine.queue import enqueue
 
-WORD_FLUSH_THRESHOLD = 8
+WORD_FLUSH_THRESHOLD = 6  # words before force-flush mid-sentence
+_MIN_SEND_CHARS = 20  # sentence splits shorter than this are held
 
 
 def feed_token(engine: dict, token: str) -> None:
-    """Accumulate token; push complete sentences/clauses to queue."""
     if engine["interrupted"].is_set():
         return
     engine["token_buf"] += token
+
+    # Sentence/clause boundary split
     while True:
         sentence, remainder = split_sentence(engine["token_buf"])
-        if sentence and len(sentence) >= MIN_CHUNK_CHARS:
+        if sentence and len(sentence) >= _MIN_SEND_CHARS:
             engine["token_buf"] = remainder
             enqueue(engine, sentence, priority=1)
         else:
             break
+
+    # Word-count flush
     if len(engine["token_buf"].split()) >= WORD_FLUSH_THRESHOLD:
         text = engine["token_buf"].strip()
         engine["token_buf"] = ""
@@ -3281,29 +4583,104 @@ def feed_token(engine: dict, token: str) -> None:
 
 
 def flush(engine: dict) -> None:
-    """Push any remaining buffer."""
+    """
+    Called after LLM finishes streaming.
+
+    The [6, 1] trailing chunk problem:
+      LLM outputs "Check latest air news sites for updates."
+      Word-flush fires at "Check latest air news sites for" (6 words) → chunk 1
+      Remainder: "updates." → 1 word, has terminal punct → was sent as chunk 2
+
+    Fix: append the short tail onto the PREVIOUS chunk that's already queued,
+    rather than sending it standalone. We do this by peeking at what's in the
+    queue and merging if the last item is recent and short tail qualifies.
+
+    If queue is empty (whole response fit in one flush), just send normally.
+
+    Minimum standalone flush = 4 words OR the buffer is the entire response
+    (i.e. nothing was enqueued yet during feed_token — short responses).
+    """
     text = engine["token_buf"].strip()
     engine["token_buf"] = ""
-    if text and len(text) >= 2:
-        enqueue(engine, text, priority=1)
+
+    if not text:
+        return
+
+    words = text.split()
+
+    # Short tail (< 4 words) — try to merge with last queued chunk instead
+    if len(words) < 4:
+        merged = _try_merge_with_last(engine, text)
+        if merged:
+            return  # successfully appended to previous chunk
+
+    # Either long enough to stand alone, or nothing in queue to merge with
+    enqueue(engine, text, priority=1)
+
+
+def _try_merge_with_last(engine: dict, tail: str) -> bool:
+    """
+    Pop the last item from the priority queue, append tail, re-enqueue.
+    Returns True if merge succeeded, False if queue was empty or wrong type.
+
+    PriorityQueue doesn't support peek/pop-last, so we drain into a list,
+    modify the last item, and re-fill. This is safe because flush() is called
+    after the LLM loop ends — no concurrent feed_token() calls at this point.
+    """
+    q = engine["queue"]
+    items = []
+    while not q.empty():
+        try:
+            items.append(q.get_nowait())
+        except Exception:
+            break
+
+    if not items:
+        return False
+
+    # Find the last normal-priority item (priority=1)
+    last_idx = None
+    for i in range(len(items) - 1, -1, -1):
+        if items[i][0] == 1:  # normal priority
+            last_idx = i
+            break
+
+    if last_idx is None:
+        # Only filler items in queue — put everything back, send tail standalone
+        for item in items:
+            q.put(item)
+        return False
+
+    # Merge tail onto the last chunk
+    priority, seq, prev_text = items[last_idx]
+    merged_text = (prev_text.rstrip(".!?,;:") + " " + tail).strip()
+    items[last_idx] = (priority, seq, merged_text)
+
+    for item in items:
+        q.put(item)
+
+    return True
 
 ```
 
 ### tts/engine/queue.py
 
 ```python
+# tts/engine/queue.py
 def enqueue(engine: dict, text: str, priority: int = 1) -> None:
     """priority=0 → filler (plays first), priority=1 → normal."""
-    engine["queue"].put((priority, text))
+    seq = next(engine["seq"])
+    engine["queue"].put((priority, seq, text))
 
 ```
 
 ### tts/engine/state.py
 
 ```python
+# tts/engine/state.py
 import threading
 import queue
-import random
+import itertools
 
 from config.tts import (
     SUPERTONIC_VOICE,
@@ -3312,18 +4689,25 @@ from config.tts import (
     SUPERTONIC_SPEED,
 )
 
+# Filler range designed to cover the observed LLM first-token distribution:
+#   min observed: 1287ms  max observed: 2189ms  avg: 1728ms
+# We need fillers from ~1300ms to ~2200ms so adaptive selection can always
+# find one that lands just above the current rolling estimate.
 _FILLERS = [
-    "Mm-hmm.",
-    "Sure.",
-    "Okay.",
-    "Right.",
-    "Mm.",
-    "Yeah.",
-    "I see.",
-    "Got it.",
-    "Ah.",
-    "Sure thing.",
+    "Got it.",  # ~700ms  — short fallback
+    "Sure.",  # ~650ms  — short fallback
+    "Okay.",  # ~680ms  — short fallback
+    "Sure thing.",  # ~1050ms
+    "Right, on it.",  # ~1200ms
+    "Sure, let me check.",  # ~1500ms
+    "Okay, one moment.",  # ~1550ms
+    "Let me look at that.",  # ~1700ms
+    "Sure, one moment please.",  # ~1850ms
+    "Okay, let me check that.",  # ~1900ms
+    "Sure, give me just a moment.",  # ~2100ms
 ]
+
+SENTINEL = (float("inf"), float("inf"), None)
 
 
 def create_engine(
@@ -3332,7 +4716,6 @@ def create_engine(
     steps: int = SUPERTONIC_STEPS,
     language: str = SUPERTONIC_LANGUAGE,
 ) -> dict:
-    """Create TTS engine state dict. Call start_worker(engine) to begin."""
     return {
         "voice": voice,
         "speed": speed,
@@ -3340,21 +4723,54 @@ def create_engine(
         "language": language,
         "token_buf": "",
         "queue": queue.PriorityQueue(),
+        "seq": itertools.count(),
         "interrupted": threading.Event(),
         "speaking": threading.Event(),
         "running": False,
         "worker_thread": None,
         "fillers": _FILLERS,
+        "filler_audio": {},  # text → np.ndarray
+        "filler_durations_ms": {},  # text → float ms (measured at warmup)
+        # Rolling EMA of LLM first-token latency — used by speak_filler()
+        # to pick a filler that covers the gap. Seeded at 1800ms (slightly
+        # above the 1728ms avg) so first response is covered conservatively.
+        "last_llm_first_token_ms": 1800.0,
     }
 
 
-SENTINEL = (float("inf"), None)  # sorts last, always
+def warm_fillers(engine: dict) -> None:
+    """Pre-generate all filler audio and record exact durations."""
+    from tts.generate.pipeline import generate_one
+    from tts.model.singleton import get_model
+
+    sr = get_model()["sample_rate"]
+    print("[TTS] Pre-generating fillers...")
+    for text in _FILLERS:
+        try:
+            audio = generate_one(
+                text,
+                voice=engine["voice"],
+                speed=engine["speed"],
+                steps=engine["steps"],
+                language=engine["language"],
+            )
+            engine["filler_audio"][text] = audio
+            engine["filler_durations_ms"][text] = len(audio) / sr * 1000
+        except Exception as e:
+            print(f"[TTS] Filler warmup failed for '{text}': {e}")
+
+    dur = engine["filler_durations_ms"]
+    print(
+        f"[TTS] {len(engine['filler_audio'])} fillers ready  "
+        f"range: {min(dur.values()):.0f}–{max(dur.values()):.0f}ms"
+    )
 
 ```
 
 ### tts/engine/status.py
 
 ```python
+# tts/engine/status.py
 import time
 
 
@@ -3388,10 +4804,21 @@ def shutdown(engine: dict) -> None:
 ### tts/engine/worker.py
 
 ```python
+# tts/engine/worker.py
+"""
+Pipelined TTS worker.
+
+Generator thread: text queue → generate_one() → audio_queue
+Player thread:    audio_queue → play_audio()
+
+While chunk N is playing, chunk N+1 is already being generated.
+Eliminates the inter-chunk silence that caused "stuck between words".
+"""
 import threading
 import time
+import queue as _queue
 
-MERGE_WINDOW_SEC = 0.05
+MERGE_WINDOW_SEC = 0.02
 
 
 def start_worker(engine: dict) -> None:
@@ -3406,52 +4833,91 @@ def _loop(engine: dict) -> None:
     from tts.playback.stream import play_audio
     from tts.text.clean import clean_markdown
     from tts.model.singleton import get_model
+    from tts.engine.state import warm_fillers
 
-    model = get_model()  # warm up in worker thread
+    model = get_model()
+    warm_fillers(engine)
+    sr = model["sample_rate"]
 
-    while True:
-        item = engine["queue"].get()
-        priority, text = item
-        if text is None:
-            break
+    # maxsize=2: current + 1 lookahead. Blocks generator if player falls behind.
+    audio_queue: _queue.Queue = _queue.Queue(maxsize=2)
 
-        if engine["interrupted"].is_set():
-            continue
+    def _player():
+        while True:
+            item = audio_queue.get()
+            if item is None:
+                break
+            engine["speaking"].set()
+            try:
+                play_audio(item, sr)
+            except Exception as e:
+                print(f"[TTS Player] {e}")
+            finally:
+                if audio_queue.empty():
+                    engine["speaking"].clear()
 
-        collected = [text]
-        if priority > 0:
-            deadline = time.time() + MERGE_WINDOW_SEC
-            while time.time() < deadline:
-                try:
-                    nxt_priority, nxt_text = engine["queue"].get_nowait()
-                    if nxt_priority == 0:
-                        engine["queue"].put((nxt_priority, nxt_text))
-                        break
-                    collected.append(nxt_text)
-                except Exception:
-                    time.sleep(0.005)
+    player = threading.Thread(target=_player, daemon=True)
+    player.start()
 
-        if engine["interrupted"].is_set():
-            continue
+    is_first = True
 
-        merged = " ".join(clean_markdown(c) for c in collected if c.strip())
-        if not merged:
-            continue
+    try:
+        while True:
+            item = engine["queue"].get()
+            priority, _, text = item
+            if text is None:
+                break
 
-        engine["speaking"].set()
-        try:
-            audio = generate_one(
-                merged,
-                voice=engine["voice"],
-                speed=engine["speed"],
-                steps=engine["steps"],
-                language=engine["language"],
-            )
-            play_audio(audio, model["sample_rate"])
-        except Exception as e:
-            print(f"[TTS Engine] {e}")
-        finally:
-            engine["speaking"].clear()
+            if engine["interrupted"].is_set():
+                while not audio_queue.empty():
+                    try:
+                        audio_queue.get_nowait()
+                    except Exception:
+                        pass
+                engine["speaking"].clear()
+                is_first = True
+                continue
+
+            collected = [text]
+            if not is_first and priority > 0:
+                deadline = time.time() + MERGE_WINDOW_SEC
+                while time.time() < deadline:
+                    try:
+                        nxt = engine["queue"].get_nowait()
+                        if nxt[0] == 0:
+                            engine["queue"].put(nxt)
+                            break
+                        collected.append(nxt[2])
+                    except Exception:
+                        time.sleep(0.003)
+
+            if engine["interrupted"].is_set():
+                is_first = True
+                continue
+
+            merged = " ".join(clean_markdown(c) for c in collected if c and c.strip())
+            if not merged:
+                continue
+
+            is_first = False
+            try:
+                audio = generate_one(
+                    merged,
+                    voice=engine["voice"],
+                    speed=engine["speed"],
+                    steps=engine["steps"],
+                    language=engine["language"],
+                )
+                audio_queue.put(audio)  # blocks if player is 2 chunks behind
+            except Exception as e:
+                print(f"[TTS Generator] {e}")
+
+            if engine["queue"].empty():
+                is_first = True
+
+    finally:
+        audio_queue.put(None)
+        player.join(timeout=5)
 
 ```
 
@@ -3909,15 +5375,20 @@ if __name__ == "__main__":
 ### tts/text/split.py
 
 ```python
+# tts/text/split.py
 import re
 
 _SENTENCE_END = re.compile(r"(?<![A-Z][a-z])(?<!\d)([.?!])(\s+|$)")
 _CLAUSE_BREAK = re.compile(r"[,;:]\s+")
-MIN_CHUNK_CHARS = 6
+
+# Why 30 not 25:
+# "Today's weather:" is 17 chars — was triggering a clause split and creating
+# a micro-chunk. At 30 chars, clause breaks only fire on genuinely long phrases,
+# keeping short conversational sentences as single chunks.
+MIN_CHUNK_CHARS = 30  # was 25
 
 
 def split_sentence(buf: str) -> tuple[str, str]:
-    """Split buf at first sentence/clause boundary. Returns (chunk, remainder)."""
     m = _SENTENCE_END.search(buf)
     if m:
         return buf[: m.end()].strip(), buf[m.end() :]
@@ -3925,11 +5396,6 @@ def split_sentence(buf: str) -> tuple[str, str]:
     if m and m.start() >= MIN_CHUNK_CHARS:
         return buf[: m.start()].strip(), buf[m.end() :]
     return "", buf
-
-
-if __name__ == "__main__":
-    print(split_sentence("Hello world. This is a test."))
-    print(split_sentence("Waiting, for more"))
 
 ```
 

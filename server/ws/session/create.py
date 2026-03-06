@@ -33,5 +33,10 @@ def create_session() -> dict:
             language=SUPERTONIC_LANGUAGE,
         )
         start_worker(engine)
+        # added this might cause issues ----
+        from tts.model.singleton import get_model as get_tts_model
+
+        get_tts_model()
+        # ----------------------------------
         session["tts"] = engine
     return session

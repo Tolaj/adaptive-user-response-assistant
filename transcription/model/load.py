@@ -25,6 +25,20 @@ def load_whisper(
     model = wm.Whisper(dims)
     model.load_state_dict(checkpoint["model_state_dict"])
     model = model.to(device)
+
+    # warm up Metal kernels — kills the 5s cold-start on first real call
+    print("[Whisper] Warming up...")
+    import whisper as _w
+    import numpy as np
+
+    # 480000 = 30s at 16kHz — Whisper's full window
+    # pre-compiles the Metal kernel for the largest possible input
+    _w.transcribe(
+        model,
+        np.zeros(480000, dtype=np.float32),
+        language="en",
+        fp16=(device == "cuda"),
+    )
     print(f"[Whisper] Ready on {device}.")
     return model
 

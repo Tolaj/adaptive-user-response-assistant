@@ -4,10 +4,14 @@ import resampy
 
 
 def resample(audio: np.ndarray, from_sr: int, to_sr: int) -> np.ndarray:
-    """Resample audio. No-op if rates match."""
+    """Resample audio using scipy. No-op if rates match."""
     if from_sr == to_sr:
         return audio.astype(np.float32)
-    return resampy.resample(audio, from_sr, to_sr).astype(np.float32)
+    from scipy.signal import resample_poly
+    from math import gcd
+
+    g = gcd(from_sr, to_sr)
+    return resample_poly(audio, to_sr // g, from_sr // g).astype(np.float32)
 
 
 if __name__ == "__main__":

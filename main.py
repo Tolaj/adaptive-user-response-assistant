@@ -26,9 +26,6 @@ def main():
         print(f"  Unknown MODE '{MODE}'. Check config/features.py")
 
 
-# ── Modes ──────────────────────────────────────────────────────
-
-
 def _run_server():
     from config.server import SERVER_HOST, SERVER_PORT
     from config.features import ENABLE_STT
@@ -53,7 +50,6 @@ def _run_stt_only():
     print("  Loading Whisper...")
     get_model()
     print("  Ready.\n")
-
     logger = create_logger()
 
     def on_partial(t):
@@ -61,7 +57,6 @@ def _run_stt_only():
 
     transcriber = create_stream(on_partial=on_partial, on_final=lambda t: None)
     start_stream(transcriber)
-
     vad_state = create_vad_state(sample_rate=RECORD_SAMPLE_RATE)
 
     def on_speech_start():
@@ -106,9 +101,8 @@ def _run_tts_only():
         language=SUPERTONIC_LANGUAGE,
     )
     start_worker(engine)
-    get_tts_model()  # Pre-warm the model before showing "Ready"
+    get_tts_model()
     print("  Ready. Type text to speak. Empty line to quit.\n")
-
     logger = create_logger()
     try:
         while True:
@@ -135,7 +129,6 @@ def _run_text_chat():
     print("  Loading LLM...")
     get_model()
     print("  Ready. Type to chat. Empty line to quit.\n")
-
     logger = create_logger()
     history = create_history()
     while True:
@@ -154,9 +147,14 @@ def _run_text_chat():
             ai_response += token
         print()
         llm_total = time.time() - t_start
-        llm_first_token = first_token_time if first_token_time else llm_total
         log_request(
-            logger, user_text, ai_response, 0.0, llm_first_token, llm_total, llm_total
+            logger,
+            user_text,
+            ai_response,
+            0.0,
+            first_token_time or llm_total,
+            llm_total,
+            llm_total,
         )
 
 
@@ -176,7 +174,6 @@ def _run_voice_chat():
     load_whisper()
     get_model()
     print("  Ready.\n")
-
     logger = create_logger()
     history = create_history()
     lock = threading.Lock()
@@ -199,9 +196,8 @@ def _run_voice_chat():
         def _run():
             try:
                 e2e_start = time.time()
-                whisper_start = time.time()
                 text = end_of_speech(transcriber)
-                whisper_latency = time.time() - whisper_start
+                whisper_latency = time.time() - e2e_start
                 if not text:
                     lock.release()
                     return
@@ -217,16 +213,14 @@ def _run_voice_chat():
                     ai_response += token
                 print()
                 llm_total = time.time() - llm_start
-                llm_first_token = first_token_time if first_token_time else llm_total
-                e2e_total = time.time() - e2e_start
                 log_request(
                     logger,
                     text,
                     ai_response,
                     whisper_latency,
-                    llm_first_token,
+                    first_token_time or llm_total,
                     llm_total,
-                    e2e_total,
+                    time.time() - e2e_start,
                 )
             finally:
                 lock.release()
@@ -258,7 +252,7 @@ def _run_full():
     from tts.engine.state import create_engine
     from tts.engine.worker import start_worker
     from tts.engine.feed import feed_token, flush as tts_flush
-    from tts.engine.control import interrupt, resume, speak_filler
+    from tts.engine.control import interrupt, resume, speak_filler, record_llm_latency
     from tts.engine.status import is_speaking, shutdown
     from config.vad import RECORD_SAMPLE_RATE
     from ui.console import show_partial, show_speaking, show_you, start_ai_line
@@ -274,6 +268,9 @@ def _run_full():
         language=SUPERTONIC_LANGUAGE,
     )
     start_worker(engine)
+    from tts.model.singleton import get_model as get_tts_model
+
+    get_tts_model()
     print("  All ready.\n")
 
     logger = create_logger()
@@ -306,7 +303,7 @@ def _run_full():
                     return
                 show_you(text)
                 resume(engine)
-                speak_filler(engine)
+                speak_filler(engine)  # non-blocking — returns immediately
                 start_ai_line()
                 llm_start = time.time()
                 ai_response = ""
@@ -322,6 +319,12 @@ def _run_full():
                 llm_total = time.time() - llm_start
                 llm_first_token = first_token_time if first_token_time else llm_total
                 e2e_total = time.time() - e2e_start
+
+                # Update rolling LLM latency so speak_filler() picks the right
+                # filler duration on the next response
+                if first_token_time is not None:
+                    record_llm_latency(engine, first_token_time * 1000)
+
                 log_request(
                     logger,
                     text,
