@@ -30,3 +30,4 @@ silero-vad
 noisereduce
 pynput
 mlx-audio
+opencv-python
