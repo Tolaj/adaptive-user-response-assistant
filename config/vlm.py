@@ -6,9 +6,7 @@ VLM_BACKEND = "server"  # "package" or "server"
 
 # Model paths
 VLM_MODEL_PATH = str(BASE_DIR / "models/vlm/qwen3vl2b/Qwen3VL-2B-Instruct-Q4_K_M.gguf")
-VLM_MMPROJ_PATH = str(
-    BASE_DIR / "models/vlm/qwen3vl2b/mmproj-Qwen3VL-2B-Instruct-Q8_0.gguf"
-)
+VLM_MMPROJ_PATH = str(BASE_DIR / "models/vlm/qwen3vl2b/mmproj-Qwen3-VL-2B-Instruct-Q8_0.gguf")
 
 # Server backend settings
 VLM_SERVER_PORT = 8081

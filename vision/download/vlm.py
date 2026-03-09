@@ -1,0 +1,1 @@
+from vision.model.load import _ensure_downloaded as ensure_downloaded
