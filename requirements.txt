@@ -29,3 +29,4 @@ jiwer
 silero-vad
 noisereduce
 pynput
+mlx-audio
