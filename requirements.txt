@@ -31,3 +31,12 @@ noisereduce
 pynput
 mlx-audio
 opencv-python
+playwright 
+schedule 
+# playwright install chromium
+browser-cookie3
+pyautogui 
+pyperclip
+langgraph 
+langchain-openai
+pytesseract

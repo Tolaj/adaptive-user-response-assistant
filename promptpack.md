@@ -1,7 +1,7 @@
 # PromptPack Output
 
 **Root:** `/Users/swapnil/Documents/Projects/adaptive-user-response-assistant`
-**Generated:** 2026-03-09T13:30:09.418Z
+**Generated:** 2026-03-09T14:56:32.409Z
 
 ---
 
@@ -27,6 +27,7 @@
 │     ├─ mono.py
 │     ├─ normalise.py
 │     └─ resample.py
+├─ audio_000.wav
 ├─ backup/
 ├─ config/
 │  ├─ __init__.py
@@ -39,6 +40,19 @@
 │  ├─ vad.py
 │  ├─ vlm.py
 │  └─ whisper.py
+├─ jobhunter/
+│  ├─ actions.py
+│  ├─ agent.py
+│  ├─ browser.py
+│  ├─ config.py
+│  ├─ data/
+│  │  └─ jobs.db
+│  ├─ logger.py
+│  ├─ profile.py
+│  ├─ scheduler.py
+│  ├─ snap.py
+│  ├─ storage.py
+│  └─ vlm_query.py
 ├─ llm/
 │  ├─ __init__.py
 │  ├─ download/
@@ -67,8 +81,10 @@
 │  │  └─ system.py
 │  └─ tools/
 ├─ logs/
+├─ main_jobhunter.py
 ├─ main.py
 ├─ requirements.txt
+├─ sentence_04.wav
 ├─ server/
 │  ├─ __init__.py
 │  ├─ app.py
@@ -100,21 +116,7 @@
 │        ├─ __init__.py
 │        ├─ create.py
 │        └─ teardown.py
-├─ tests/
-│  ├─ benchmark_stt.py
-│  ├─ benchmark_tts.py
-│  ├─ en_sample_8_parts/
-│  └─ recordings/
-│     ├─ sentence_01.wav
-│     ├─ sentence_02.wav
-│     ├─ sentence_03.wav
-│     ├─ sentence_04.wav
-│     ├─ sentence_05.wav
-│     ├─ sentence_06.wav
-│     ├─ sentence_07.wav
-│     ├─ sentence_08.wav
-│     ├─ sentence_09.wav
-│     └─ sentence_10.wav
+├─ test_audio_000.wav
 ├─ transcription/
 │  ├─ __init__.py
 │  ├─ download/
@@ -196,6 +198,9 @@
    │  ├─ app.py
    │  └─ server.py
    ├─ camera.py
+   ├─ download/
+   │  ├─ __init__.py
+   │  └─ vlm.py
    ├─ inference/
    │  ├─ query.py
    │  └─ snap.py
@@ -207,6 +212,11 @@
 <!-- PAGE BREAK: FILE CONTENTS BELOW -->
 
 ## 2) File Contents
+
+
+### audio_000.wav
+
+(Skipped: binary or unreadable file)
 
 
 ### audio/__init__.py
@@ -649,10 +659,10 @@ from config.prompt import (
 #   "voice_to_text_chat"    → Mic → Whisper → LLM → print response (no TTS)
 #   "full"                  → Mic → Whisper → LLM → TTS (everything)
 
-MODE = "vision_speech"
+MODE = "vision_text"
 
 # ── Derived flags (do not edit) ───────────────────────────────
-ENABLE_STT = MODE in ("stt_only", "voice_to_text_chat", "full")
+ENABLE_STT = MODE in ("tts_only", "voice_to_text_chat", "full")
 ENABLE_TTS = MODE in ("tts_only", "full")
 ENABLE_LLM = MODE in ("text_to_text_chat", "voice_to_text_chat", "full", "tts_only")
 ENABLE_SERVER = MODE == "server"
@@ -666,7 +676,7 @@ SHOW_TEXT = True
 ```python
 import os
 
-ACTIVE_LLM_MODEL = "qwen2.5-3b"
+ACTIVE_LLM_MODEL = "arbllm"
 GPU_LAYERS = 36
 CONTEXT_SIZE = 2048
 CPU_THREADS = max(1, os.cpu_count() // 2)
@@ -696,9 +706,7 @@ for _d in (LOGS_DIR, MODELS_DIR, WHISPER_DIR, LLM_DIR, SUPERTONIC_DIR):
 ```python
 # config/prompt.py
 VOICE_SYSTEM_PROMPT = (
-    "You are a concise voice assistant. "
-    "Reply in 1 sentence, 10 words max. "
-    "Never use lists or markdown."
+    "You are a concise voice assistant. " "Never use lists or markdown."
 )
 VOICE_MAX_TOKENS = 60  # was 150 — prevents long multi-chunk responses
 VOICE_TEMPERATURE = 0.7
@@ -791,9 +799,7 @@ VLM_BACKEND = "server"  # "package" or "server"
 
 # Model paths
 VLM_MODEL_PATH = str(BASE_DIR / "models/vlm/qwen3vl2b/Qwen3VL-2B-Instruct-Q4_K_M.gguf")
-VLM_MMPROJ_PATH = str(
-    BASE_DIR / "models/vlm/qwen3vl2b/mmproj-Qwen3VL-2B-Instruct-Q8_0.gguf"
-)
+VLM_MMPROJ_PATH = str(BASE_DIR / "models/vlm/qwen3vl2b/mmproj-Qwen3-VL-2B-Instruct-Q8_0.gguf")
 
 # Server backend settings
 VLM_SERVER_PORT = 8081
@@ -843,6 +849,1082 @@ def _resolve_device() -> str:
 
 WHISPER_DEVICE = _resolve_device()
 print(f"[Config] Whisper device: {WHISPER_DEVICE}")
+
+```
+
+### jobhunter/actions.py
+
+```python
+# jobhunter/actions.py
+# ─────────────────────────────────────────────────────────────────────────────
+# Executes browser actions from VLM decisions using Playwright.
+# VLM says: {"action": "click", "x": 432, "y": 287}
+# This module does: page.mouse.click(432, 287)
+# ─────────────────────────────────────────────────────────────────────────────
+
+import time
+from jobhunter.config import ACTION_DELAY_MS, PAGE_LOAD_WAIT_MS
+
+
+def execute_action(action: dict) -> str:
+    """
+    Execute a single action from VLM output.
+    Returns the action type executed, or "unknown" if unrecognised.
+    """
+    from jobhunter.browser import get_browser, navigate
+
+    page = get_browser()
+    action_type = action.get("action", "unknown")
+
+    try:
+        if action_type == "click":
+            x = int(action.get("x", 0))
+            y = int(action.get("y", 0))
+            # Human-like: move then click
+            page.mouse.move(x, y)
+            time.sleep(0.1)
+            page.mouse.click(x, y)
+            page.wait_for_timeout(ACTION_DELAY_MS)
+
+        elif action_type == "type":
+            text = action.get("text", "")
+            page.keyboard.type(text, delay=50)  # 50ms between keys = human-like
+            page.wait_for_timeout(500)
+
+        elif action_type == "scroll":
+            direction = action.get("direction", "down")
+            delta = 600 if direction == "down" else -600
+            page.mouse.wheel(0, delta)
+            page.wait_for_timeout(ACTION_DELAY_MS)
+
+        elif action_type == "wait":
+            page.wait_for_timeout(PAGE_LOAD_WAIT_MS)
+
+        elif action_type == "navigate":
+            url = action.get("url", "")
+            if url:
+                navigate(url)
+
+        elif action_type in ("extract", "done"):
+            pass  # handled by caller
+
+        else:
+            print(f"[Actions] Unknown action type: {action_type}")
+
+    except Exception as e:
+        print(f"[Actions] Failed to execute {action_type}: {e}")
+
+    return action_type
+
+
+def press_enter():
+    """Press Enter key — useful after typing search queries."""
+    from jobhunter.browser import get_browser
+    page = get_browser()
+    page.keyboard.press("Enter")
+    page.wait_for_timeout(PAGE_LOAD_WAIT_MS)
+
+
+def click_at(x: int, y: int):
+    """Direct click — used for known coordinates."""
+    from jobhunter.browser import get_browser
+    page = get_browser()
+    page.mouse.move(x, y)
+    time.sleep(0.15)
+    page.mouse.click(x, y)
+    page.wait_for_timeout(ACTION_DELAY_MS)
+
+
+def type_text(text: str):
+    """Type text with human-like delay."""
+    from jobhunter.browser import get_browser
+    page = get_browser()
+    page.keyboard.type(text, delay=60)
+    page.wait_for_timeout(400)
+
+```
+
+### jobhunter/agent.py
+
+```python
+# jobhunter/agent.py
+# ─────────────────────────────────────────────────────────────────────────────
+# The core VLM agent loop.
+# Takes ONE screenshot → asks VLM what to do → executes → repeats.
+# This is the "eyes + brain" of the job hunter.
+#
+# Flow per site per query:
+#   1. Navigate to site
+#   2. VLM sees page → decides: type search / click / scroll / extract / done
+#   3. Execute action
+#   4. Repeat until VLM says "extract" or "done" or max actions reached
+#   5. Extract job listings from page
+#   6. Score each job against profile
+#   7. Save high-scoring jobs to CSV
+# ─────────────────────────────────────────────────────────────────────────────
+
+import time
+from jobhunter.config import MAX_ACTIONS_PER_PAGE, MAX_JOBS_PER_SITE, MIN_SCORE_TO_SAVE
+from jobhunter.vlm_query import decide_action, extract_jobs_from_page, score_job
+from jobhunter.actions import execute_action
+from jobhunter.storage import save_job, is_seen
+from jobhunter.logger import log
+
+
+# ── Entry URLs per site ────────────────────────────────────────────────────
+SITE_URLS = {
+    "linkedin":  "https://www.linkedin.com/jobs",
+    "indeed":    "https://www.indeed.com",
+    "naukri":    "https://www.naukri.com",
+    "wellfound": "https://wellfound.com/jobs",
+}
+
+
+def hunt_site(site: str, query: str, profile: dict) -> int:
+    """
+    Run the VLM agent on one site with one search query.
+    Returns the number of NEW jobs saved.
+    """
+    from jobhunter.browser import navigate
+
+    log(f"[{site.upper()}] Starting hunt for: '{query}'")
+
+    # ── Step 1: Navigate to site ──────────────────────────────────────────
+    url = SITE_URLS.get(site, "https://www.google.com")
+    navigate(url)
+
+    # ── Step 2: VLM action loop ───────────────────────────────────────────
+    goal = (
+        f"Search for '{query}' jobs on this site. "
+        f"Type the query in the search box, press enter, "
+        f"then scroll through results. "
+        f"When you can see job listings, say action=extract."
+    )
+
+    jobs_saved = 0
+    total_extracted = 0
+
+    for step in range(MAX_ACTIONS_PER_PAGE):
+        log(f"[{site.upper()}] Step {step+1}/{MAX_ACTIONS_PER_PAGE}")
+
+        action = decide_action(goal)
+        action_type = action.get("action", "unknown")
+
+        if action_type == "done":
+            log(f"[{site.upper()}] VLM says done.")
+            break
+
+        if action_type == "extract":
+            # ── Step 3: Extract jobs from current page view ───────────────
+            log(f"[{site.upper()}] Extracting jobs from page...")
+            jobs = extract_jobs_from_page()
+            total_extracted += len(jobs)
+
+            # ── Step 4: Score and save each job ───────────────────────────
+            for job in jobs:
+                title   = job.get("title", "")
+                company = job.get("company", "")
+
+                if not title or not company:
+                    continue
+
+                # Skip if already seen
+                if is_seen(title, company, site):
+                    log(f"  [SKIP] Already seen: {title} @ {company}")
+                    continue
+
+                # Quick keyword filter before spending VLM tokens on scoring
+                avoid = profile.get("avoid_keywords", [])
+                combined_text = f"{title} {job.get('snippet', '')}".lower()
+                if any(kw.lower() in combined_text for kw in avoid):
+                    log(f"  [SKIP] Avoided keyword in: {title}")
+                    continue
+
+                # Score the job
+                score_result = score_job(job, profile)
+                score        = int(score_result.get("score", 5))
+                reason       = score_result.get("reason", "")
+
+                if score >= MIN_SCORE_TO_SAVE:
+                    saved = save_job(job, site, score, reason)
+                    if saved:
+                        jobs_saved += 1
+                        log(f"  [SAVED ★{score}] {title} @ {company} — {reason}")
+                    else:
+                        log(f"  [DUP] {title} @ {company}")
+                else:
+                    log(f"  [LOW ★{score}] {title} @ {company} — {reason}")
+
+                if total_extracted >= MAX_JOBS_PER_SITE:
+                    log(f"[{site.upper()}] Reached max jobs limit ({MAX_JOBS_PER_SITE})")
+                    return jobs_saved
+
+            # After extraction, scroll to see more jobs
+            goal = (
+                "Scroll down to see more job listings. "
+                "If more listings are visible, say action=extract again. "
+                "If no more listings, say action=done."
+            )
+
+        else:
+            # Execute navigation action (click, type, scroll, wait, navigate)
+            execute_action(action)
+
+    log(f"[{site.upper()}] Done. Saved {jobs_saved} new jobs from '{query}'.")
+    return jobs_saved
+
+
+def run_full_hunt(profile: dict, search_queries: dict) -> dict:
+    """
+    Run the full job hunt across all sites and all queries.
+    Returns a summary dict.
+    """
+    from jobhunter.storage import get_stats
+
+    summary = {}
+    total_new = 0
+
+    for site, queries in search_queries.items():
+        site_new = 0
+        for query in queries:
+            try:
+                new = hunt_site(site, query, profile)
+                site_new += new
+                total_new += new
+                # Small pause between queries — be polite to the server
+                time.sleep(3)
+            except Exception as e:
+                log(f"[ERROR] {site} / '{query}': {e}")
+        summary[site] = site_new
+        log(f"[SUMMARY] {site}: {site_new} new jobs")
+
+    stats = get_stats()
+    log(
+        f"\n{'='*50}\n"
+        f"HUNT COMPLETE\n"
+        f"  New this run:  {total_new}\n"
+        f"  Found today:   {stats['today']}\n"
+        f"  Total in DB:   {stats['total']}\n"
+        f"{'='*50}\n"
+    )
+
+    return {"new_this_run": total_new, "stats": stats, "by_site": summary}
+
+```
+
+### jobhunter/browser.py
+
+```python
+# jobhunter/browser.py
+# ─────────────────────────────────────────────────────────────────────────────
+# Launches Playwright Chromium and injects real Chrome cookies from Keychain.
+# Fixes: cookie field validation, browser stability, reconnection handling.
+# ─────────────────────────────────────────────────────────────────────────────
+
+import threading
+import time
+from jobhunter.config import SCREENSHOT_WIDTH, SCREENSHOT_HEIGHT
+
+COOKIE_DOMAINS = [
+    "linkedin.com",
+    "indeed.com",
+    "naukri.com",
+    "wellfound.com",
+    "google.com",
+]
+
+_browser    = None   # keep browser alive at module level
+_context    = None
+_page       = None
+_playwright = None
+_lock       = threading.Lock()
+
+
+def _clean_cookie(c) -> dict | None:
+    """
+    Convert a browser_cookie3 cookie into a valid Playwright cookie dict.
+    Returns None if the cookie should be skipped.
+    """
+    import time as _time
+
+    name  = getattr(c, "name",  None)
+    value = getattr(c, "value", None)
+
+    # Skip cookies with missing required fields
+    if not name or value is None:
+        return None
+
+    # Domain: must start with dot for cross-subdomain cookies
+    domain = getattr(c, "domain", "") or ""
+    if not domain:
+        return None
+    if not domain.startswith("."):
+        domain = "." + domain
+
+    # Path
+    path = getattr(c, "path", "/") or "/"
+
+    # Expiry: must be a positive number in the future, or omitted
+    expires = getattr(c, "expires", None)
+    cookie = {
+        "name":     name,
+        "value":    str(value),
+        "domain":   domain,
+        "path":     path,
+        "secure":   bool(getattr(c, "secure", False)),
+        "httpOnly": False,
+        "sameSite": "Lax",
+    }
+
+    # Only add expires if it's a valid future timestamp
+    if expires and isinstance(expires, (int, float)) and expires > _time.time():
+        cookie["expires"] = float(expires)
+
+    return cookie
+
+
+def _get_cookies() -> list[dict]:
+    """Read Chrome cookies from macOS Keychain and clean them for Playwright."""
+    try:
+        import browser_cookie3
+    except ImportError:
+        raise RuntimeError("Run: pip install browser-cookie3")
+
+    print("[Browser] Reading cookies from macOS Keychain...")
+    all_cookies = []
+    seen = set()
+
+    for domain in COOKIE_DOMAINS:
+        try:
+            jar = browser_cookie3.chrome(domain_name=domain)
+            for c in jar:
+                cleaned = _clean_cookie(c)
+                if cleaned is None:
+                    continue
+                # Deduplicate by name+domain
+                key = (cleaned["name"], cleaned["domain"])
+                if key in seen:
+                    continue
+                seen.add(key)
+                all_cookies.append(cleaned)
+        except Exception as e:
+            print(f"[Browser] Skipped {domain}: {e}")
+
+    print(f"[Browser] {len(all_cookies)} valid cookies loaded ✓")
+    return all_cookies
+
+
+def _create_browser_and_page():
+    """Launch Playwright browser, inject cookies, return (browser, context, page)."""
+    global _playwright
+
+    from playwright.sync_api import sync_playwright
+
+    if _playwright is None:
+        _playwright = sync_playwright().start()
+
+    cookies = _get_cookies()
+
+    print("[Browser] Launching browser...")
+    browser = _playwright.chromium.launch(
+        headless=False,
+        args=[
+            f"--window-size={SCREENSHOT_WIDTH},{SCREENSHOT_HEIGHT}",
+            "--disable-blink-features=AutomationControlled",
+            "--no-sandbox",
+            "--disable-web-security",
+            "--disable-features=IsolateOrigins,site-per-process",
+        ],
+    )
+
+    context = browser.new_context(
+        viewport={"width": SCREENSHOT_WIDTH, "height": SCREENSHOT_HEIGHT},
+        user_agent=(
+            "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+            "AppleWebKit/537.36 (KHTML, like Gecko) "
+            "Chrome/122.0.0.0 Safari/537.36"
+        ),
+    )
+
+    # Inject cookies one by one — skip any that still fail
+    injected, failed = 0, 0
+    for cookie in cookies:
+        try:
+            context.add_cookies([cookie])
+            injected += 1
+        except Exception:
+            failed += 1
+
+    print(f"[Browser] Injected {injected} cookies ({failed} skipped) ✓")
+
+    page = context.new_page()
+
+    # Keep browser alive — attach close handler to detect crashes
+    def _on_close():
+        print("[Browser] Browser window was closed.")
+
+    browser.on("disconnected", _on_close)
+
+    return browser, context, page
+
+
+def get_browser():
+    """Get a ready page. Auto-recovers if browser was closed."""
+    global _browser, _context, _page, _playwright
+
+    # Fast path — check if existing page is alive
+    if _page is not None:
+        try:
+            _ = _page.url   # lightweight liveness check (cheaper than title())
+            return _page
+        except Exception:
+            print("[Browser] Page lost — relaunching browser...")
+            _page    = None
+            _context = None
+            _browser = None
+
+    with _lock:
+        if _page is not None:
+            return _page
+
+        _browser, _context, _page = _create_browser_and_page()
+        print(f"[Browser] Ready ✓ — logged in as swapnilhgf@gmail.com")
+
+    return _page
+
+
+def release_browser():
+    """Close the job hunter browser. Your real Chrome is untouched."""
+    global _browser, _context, _page, _playwright
+
+    with _lock:
+        _page = None
+        _context = None
+
+        if _browser:
+            try:
+                _browser.close()
+            except Exception:
+                pass
+            _browser = None
+
+        if _playwright:
+            try:
+                _playwright.stop()
+            except Exception:
+                pass
+            _playwright = None
+
+        print("[Browser] Closed. Your Chrome is untouched.")
+
+
+def navigate(url: str) -> None:
+    from jobhunter.config import PAGE_LOAD_WAIT_MS
+    page = get_browser()
+    try:
+        page.goto(url, wait_until="domcontentloaded", timeout=30000)
+        page.wait_for_timeout(PAGE_LOAD_WAIT_MS)
+    except Exception as e:
+        print(f"[Browser] Navigation error: {e} — retrying...")
+        time.sleep(2)
+        page = get_browser()
+        page.goto(url, wait_until="domcontentloaded", timeout=30000)
+        page.wait_for_timeout(PAGE_LOAD_WAIT_MS)
+
+
+def current_url() -> str:
+    try:
+        return get_browser().url
+    except Exception:
+        return ""
+
+```
+
+### jobhunter/config.py
+
+```python
+# jobhunter/config.py
+# ─────────────────────────────────────────────────────────────────────────────
+# Job hunter runtime configuration — tweak these without touching core logic
+# ─────────────────────────────────────────────────────────────────────────────
+
+from pathlib import Path
+
+# ── Paths ──────────────────────────────────────────────────────────────────
+BASE_DIR    = Path(__file__).parent
+DATA_DIR    = BASE_DIR / "data"
+DB_PATH     = DATA_DIR / "jobs.db"
+CSV_PATH    = DATA_DIR / "jobs_found.csv"
+LOG_PATH    = DATA_DIR / "jobhunter.log"
+
+DATA_DIR.mkdir(parents=True, exist_ok=True)
+
+# ── Scheduler ─────────────────────────────────────────────────────────────
+RUN_EVERY_HOURS = 2       # how often the full hunt cycle runs
+
+# ── VLM settings (mirrors your config/vlm.py style) ──────────────────────
+VLM_SERVER_PORT = 8081    # must match your config/vlm.py VLM_SERVER_PORT
+VLM_MAX_TOKENS  = 120     # slightly more than vision assistant — needs JSON
+VLM_TEMPERATURE = 0.1     # low = consistent, deterministic action decisions
+
+# ── Agent loop limits ──────────────────────────────────────────────────────
+MAX_ACTIONS_PER_PAGE  = 40   # max VLM → click/type steps before giving up
+MAX_JOBS_PER_SITE     = 20   # stop scrolling after collecting this many
+ACTION_DELAY_MS       = 1500 # ms to wait after each action (human-like)
+PAGE_LOAD_WAIT_MS     = 2500 # ms to wait after navigation
+
+# ── Screenshot settings (mirrors your config/vlm.py camera settings) ──────
+SCREENSHOT_WIDTH  = 1280
+SCREENSHOT_HEIGHT = 800
+JPEG_QUALITY      = 75    # higher than camera — need to read text clearly
+
+# ── Scoring thresholds ─────────────────────────────────────────────────────
+MIN_SCORE_TO_SAVE = 5     # VLM scores 1–10; only save jobs >= this score
+
+```
+
+### jobhunter/data/jobs.db
+
+(Skipped: binary or unreadable file)
+
+
+### jobhunter/logger.py
+
+```python
+# jobhunter/logger.py
+# ─────────────────────────────────────────────────────────────────────────────
+# Simple file + console logger. Mirrors server/logger.py style.
+# ─────────────────────────────────────────────────────────────────────────────
+
+from datetime import datetime
+from jobhunter.config import LOG_PATH
+
+
+def log(message: str) -> None:
+    """Print to console and append to log file."""
+    ts  = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    line = f"[{ts}] {message}"
+    print(line, flush=True)
+    try:
+        with open(LOG_PATH, "a", encoding="utf-8") as f:
+            f.write(line + "\n")
+    except Exception:
+        pass  # never crash because of logging
+
+```
+
+### jobhunter/profile.py
+
+```python
+# jobhunter/profile.py
+# ─────────────────────────────────────────────────────────────────────────────
+# EDIT THIS FILE with your real details before running the job hunter.
+# The VLM uses this profile to score and filter jobs intelligently.
+# ─────────────────────────────────────────────────────────────────────────────
+
+PROFILE = {
+    # ── Who you are ───────────────────────────────────────────────────────────
+    "name": "Swapnil",
+    "job_titles": [
+        "Junior Software Developer",
+        "Junior Python Developer",
+        "Junior Backend Developer",
+        "Junior Full Stack Developer",
+    ],
+
+    # ── Skills (VLM will check job descriptions for these) ───────────────────
+    "skills": [
+        "Python",
+        "JavaScript",
+        "React",
+        "Node.js",
+        "REST APIs",
+        "SQL",
+        "Git",
+        "Docker",  # remove if you don't know this
+    ],
+
+    # ── Experience ────────────────────────────────────────────────────────────
+    "years_experience": 1,   # 0–2 for junior
+    "education": "Bachelor's in Computer Science",  # or your actual degree
+
+    # ── Location preferences ──────────────────────────────────────────────────
+    "location": "India",           # your country/city
+    "remote_preference": "remote", # "remote", "hybrid", "onsite", or "any"
+    "open_to_relocation": False,
+
+    # ── Salary filter ─────────────────────────────────────────────────────────
+    # Set to None to disable salary filtering
+    "min_salary_lpa": None,        # e.g. 4 means ₹4 LPA minimum (for India)
+    "currency": "INR",             # "INR", "USD", "EUR" etc.
+
+    # ── Keywords to AVOID ─────────────────────────────────────────────────────
+    # Jobs containing any of these will be skipped
+    "avoid_keywords": [
+        "senior",
+        "lead",
+        "10+ years",
+        "5+ years",
+        "unpaid",
+        "internship",   # remove this if you want internships
+        "blockchain",
+        "web3",
+    ],
+
+    # ── Keywords you WANT ─────────────────────────────────────────────────────
+    # Jobs with these get a score boost
+    "prefer_keywords": [
+        "python",
+        "backend",
+        "api",
+        "startup",
+        "product",
+    ],
+}
+
+# ── Search queries per site ────────────────────────────────────────────────────
+# These are what get typed into each job site's search box
+SEARCH_QUERIES = {
+    "linkedin": [
+        "junior python developer remote",
+        "junior backend developer india",
+        "junior software developer remote india",
+    ],
+    "indeed": [
+        "junior python developer",
+        "junior software developer remote",
+        "entry level backend developer",
+    ],
+    "naukri": [
+        "junior python developer",
+        "junior software developer",
+        "entry level developer",
+    ],
+    "wellfound": [
+        "junior engineer python",
+        "software engineer junior remote",
+    ],
+}
+
+# ── Site credentials (needed for LinkedIn login) ──────────────────────────────
+CREDENTIALS = {
+    "linkedin": {
+        "email": "your_email@gmail.com",     # ← EDIT THIS
+        "password": "your_password_here",     # ← EDIT THIS
+    },
+    # Indeed, Naukri, Wellfound work without login for basic search
+}
+
+```
+
+### jobhunter/scheduler.py
+
+```python
+# jobhunter/scheduler.py
+# ─────────────────────────────────────────────────────────────────────────────
+# Keeps the job hunt running all day.
+# Runs immediately on start, then every RUN_EVERY_HOURS hours.
+# ─────────────────────────────────────────────────────────────────────────────
+
+import time
+import schedule
+from datetime import datetime
+
+from jobhunter.config import RUN_EVERY_HOURS
+from jobhunter.logger import log
+
+
+def _run_hunt():
+    """Single hunt cycle — called by scheduler."""
+    from jobhunter.profile import PROFILE, SEARCH_QUERIES
+    from jobhunter.agent import run_full_hunt
+
+    log(f"\n{'='*50}")
+    log(f"HUNT CYCLE STARTING — {datetime.now().strftime('%A %d %b %Y, %H:%M')}")
+    log(f"{'='*50}")
+
+    try:
+        result = run_full_hunt(PROFILE, SEARCH_QUERIES)
+        log(f"Cycle complete. {result['new_this_run']} new jobs saved.")
+    except Exception as e:
+        log(f"[ERROR] Hunt cycle crashed: {e}")
+        import traceback
+        log(traceback.format_exc())
+
+
+def start_scheduler():
+    """
+    Run immediately, then repeat every RUN_EVERY_HOURS hours.
+    Blocks forever — call from main_jobhunter.py.
+    """
+    log(f"Job hunter scheduler starting.")
+    log(f"Will run every {RUN_EVERY_HOURS} hour(s). Press Ctrl+C to stop.\n")
+
+    # Run once immediately
+    _run_hunt()
+
+    # Then schedule repeating runs
+    schedule.every(RUN_EVERY_HOURS).hours.do(_run_hunt)
+
+    while True:
+        schedule.run_pending()
+        time.sleep(60)  # check every minute
+
+```
+
+### jobhunter/snap.py
+
+```python
+# jobhunter/snap.py
+# ─────────────────────────────────────────────────────────────────────────────
+# Captures the current browser page as a base64 JPEG.
+# Mirrors vision/inference/snap.py — same interface, different source.
+# Instead of webcam → we capture the Playwright browser page.
+# ─────────────────────────────────────────────────────────────────────────────
+
+import base64
+from jobhunter.config import JPEG_QUALITY
+
+
+def snap_browser_b64() -> str:
+    """
+    Screenshot the current browser page → base64 JPEG string.
+    Drop-in replacement for vision/inference/snap.py snap_b64().
+    """
+    from jobhunter.browser import get_browser
+
+    page = get_browser()
+
+    # Full PNG screenshot from Playwright
+    png_bytes = page.screenshot(full_page=False)  # viewport only — faster
+
+    # Convert PNG → JPEG for smaller payload (same as camera pipeline)
+    from PIL import Image
+    import io
+
+    img = Image.open(io.BytesIO(png_bytes)).convert("RGB")
+    buf = io.BytesIO()
+    img.save(buf, format="JPEG", quality=JPEG_QUALITY)
+    return base64.b64encode(buf.getvalue()).decode()
+
+```
+
+### jobhunter/storage.py
+
+```python
+# jobhunter/storage.py
+# ─────────────────────────────────────────────────────────────────────────────
+# SQLite for deduplication + CSV for your readable output.
+# Every job gets a unique ID (hash of title+company+site).
+# If the same job is found again, it's silently skipped.
+# ─────────────────────────────────────────────────────────────────────────────
+
+import csv
+import hashlib
+import sqlite3
+from datetime import datetime
+from pathlib import Path
+
+from jobhunter.config import DB_PATH, CSV_PATH
+
+
+# ── Schema ─────────────────────────────────────────────────────────────────
+_CREATE_TABLE = """
+CREATE TABLE IF NOT EXISTS jobs (
+    id          TEXT PRIMARY KEY,
+    title       TEXT,
+    company     TEXT,
+    location    TEXT,
+    salary      TEXT,
+    posted      TEXT,
+    url         TEXT,
+    snippet     TEXT,
+    site        TEXT,
+    score       INTEGER,
+    score_reason TEXT,
+    found_at    TEXT
+);
+"""
+
+_CSV_HEADERS = [
+    "found_at", "site", "score", "title", "company",
+    "location", "salary", "posted", "url", "snippet", "score_reason"
+]
+
+
+def _get_conn() -> sqlite3.Connection:
+    conn = sqlite3.connect(str(DB_PATH))
+    conn.execute(_CREATE_TABLE)
+    conn.commit()
+    return conn
+
+
+def _job_id(title: str, company: str, site: str) -> str:
+    """Stable hash — same job from same site always gets same ID."""
+    raw = f"{title.lower().strip()}|{company.lower().strip()}|{site.lower()}"
+    return hashlib.md5(raw.encode()).hexdigest()
+
+
+def is_seen(title: str, company: str, site: str) -> bool:
+    """Return True if this job is already in the database."""
+    job_id = _job_id(title, company, site)
+    conn = _get_conn()
+    row = conn.execute("SELECT 1 FROM jobs WHERE id=?", (job_id,)).fetchone()
+    conn.close()
+    return row is not None
+
+
+def save_job(job: dict, site: str, score: int, score_reason: str) -> bool:
+    """
+    Save a job to SQLite + append to CSV.
+    Returns True if saved (new), False if duplicate (skipped).
+    """
+    title   = job.get("title", "Unknown")
+    company = job.get("company", "Unknown")
+
+    if is_seen(title, company, site):
+        return False  # already have this one
+
+    job_id   = _job_id(title, company, site)
+    found_at = datetime.now().strftime("%Y-%m-%d %H:%M")
+
+    row = {
+        "id":           job_id,
+        "title":        title,
+        "company":      company,
+        "location":     job.get("location", ""),
+        "salary":       job.get("salary", ""),
+        "posted":       job.get("posted", ""),
+        "url":          job.get("url", ""),
+        "snippet":      job.get("snippet", ""),
+        "site":         site,
+        "score":        score,
+        "score_reason": score_reason,
+        "found_at":     found_at,
+    }
+
+    # ── Write to SQLite ──────────────────────────────────────────────────
+    conn = _get_conn()
+    conn.execute(
+        """INSERT OR IGNORE INTO jobs
+           (id,title,company,location,salary,posted,url,snippet,site,score,score_reason,found_at)
+           VALUES (:id,:title,:company,:location,:salary,:posted,:url,:snippet,:site,:score,:score_reason,:found_at)""",
+        row,
+    )
+    conn.commit()
+    conn.close()
+
+    # ── Append to CSV ────────────────────────────────────────────────────
+    csv_exists = CSV_PATH.exists()
+    with open(CSV_PATH, "a", newline="", encoding="utf-8") as f:
+        writer = csv.DictWriter(f, fieldnames=_CSV_HEADERS)
+        if not csv_exists:
+            writer.writeheader()
+        writer.writerow({k: row.get(k, "") for k in _CSV_HEADERS})
+
+    return True
+
+
+def get_stats() -> dict:
+    """Return summary stats for logging."""
+    conn = _get_conn()
+    total = conn.execute("SELECT COUNT(*) FROM jobs").fetchone()[0]
+    today = conn.execute(
+        "SELECT COUNT(*) FROM jobs WHERE found_at >= date('now')"
+    ).fetchone()[0]
+    top = conn.execute(
+        "SELECT title, company, score FROM jobs ORDER BY score DESC LIMIT 3"
+    ).fetchall()
+    conn.close()
+    return {"total": total, "today": today, "top_3": top}
+
+```
+
+### jobhunter/vlm_query.py
+
+```python
+# jobhunter/vlm_query.py
+# ─────────────────────────────────────────────────────────────────────────────
+# Sends browser screenshots to your VLM server and gets back structured actions.
+# Mirrors vision/inference/query.py — same HTTP call to your llama-server.
+# ─────────────────────────────────────────────────────────────────────────────
+
+import json
+import re
+import requests
+
+from jobhunter.snap import snap_browser_b64
+from jobhunter.config import VLM_SERVER_PORT, VLM_MAX_TOKENS, VLM_TEMPERATURE
+
+
+# ── System prompt for navigation decisions ─────────────────────────────────
+_NAV_SYSTEM = """You are a browser automation agent controlling a web browser to find job listings.
+You see a screenshot of the current browser page.
+Your job is to take ONE action to make progress toward the goal.
+
+You MUST respond with ONLY a JSON object — no explanation, no markdown, no extra text.
+
+JSON format:
+{
+  "action": "click" | "type" | "scroll" | "wait" | "extract" | "done" | "navigate",
+  "x": <pixel x, only for click>,
+  "y": <pixel y, only for click>,
+  "text": "<text to type, only for type action>",
+  "url": "<url, only for navigate action>",
+  "direction": "down" | "up",
+  "reason": "<one short sentence why>"
+}
+
+Rules:
+- click: click at pixel coordinates (x, y)
+- type: type text (assumes an input is already focused)
+- scroll: scroll the page
+- wait: wait for page to load (use after clicks that trigger navigation)
+- extract: the page now shows job listings you can read — extract them now
+- navigate: go directly to a URL
+- done: no more jobs to find on this page
+"""
+
+# ── System prompt for job data extraction ──────────────────────────────────
+_EXTRACT_SYSTEM = """You are a job listing extractor. You see a screenshot of a job search results page.
+Extract ALL visible job listings into a JSON array.
+
+Respond with ONLY a JSON array — no markdown, no explanation.
+
+Each item format:
+{
+  "title": "<job title>",
+  "company": "<company name>",
+  "location": "<location or Remote>",
+  "salary": "<salary if shown, else null>",
+  "posted": "<time posted if shown, else null>",
+  "url": "<job URL if visible in browser address or links, else null>",
+  "snippet": "<brief description if visible, else null>"
+}
+
+If you cannot see any job listings, return an empty array: []
+"""
+
+# ── System prompt for VLM job scoring ──────────────────────────────────────
+_SCORE_SYSTEM = """You are a job relevance scorer for a junior software developer.
+Given a job listing and a candidate profile, score the job from 1-10.
+
+Respond with ONLY a JSON object:
+{
+  "score": <1-10>,
+  "reason": "<one sentence why>",
+  "good_match": true | false
+}
+
+Score guide:
+10 = perfect match (title, skills, level all match)
+7-9 = strong match (most criteria match)
+5-6 = partial match (some skills missing but worth applying)
+1-4 = poor match (wrong level, wrong skills, or flagged keywords)
+"""
+
+
+def _call_vlm(screenshot_b64: str, system_prompt: str, user_prompt: str) -> str:
+    """
+    Single HTTP call to your llama-server.
+    Mirrors _query_server() in vision/inference/query.py — same endpoint.
+    """
+    try:
+        response = requests.post(
+            f"http://localhost:{VLM_SERVER_PORT}/v1/chat/completions",
+            json={
+                "messages": [
+                    {"role": "system", "content": system_prompt},
+                    {
+                        "role": "user",
+                        "content": [
+                            {
+                                "type": "image_url",
+                                "image_url": {
+                                    "url": f"data:image/jpeg;base64,{screenshot_b64}"
+                                },
+                            },
+                            {"type": "text", "text": user_prompt},
+                        ],
+                    },
+                ],
+                "max_tokens": VLM_MAX_TOKENS,
+                "temperature": VLM_TEMPERATURE,
+                "stream": False,
+            },
+            timeout=30,
+        )
+        return response.json()["choices"][0]["message"]["content"].strip()
+    except Exception as e:
+        print(f"[VLM] Call failed: {e}")
+        return "{}"
+
+
+def _parse_json(raw: str) -> dict | list:
+    """Robustly extract JSON from VLM response — handles stray markdown."""
+    raw = raw.strip()
+    # Strip markdown code fences if present
+    raw = re.sub(r"^```(?:json)?\s*", "", raw)
+    raw = re.sub(r"\s*```$", "", raw)
+    try:
+        return json.loads(raw)
+    except Exception:
+        # Try to find JSON object/array inside the text
+        match = re.search(r"(\{.*\}|\[.*\])", raw, re.DOTALL)
+        if match:
+            try:
+                return json.loads(match.group(1))
+            except Exception:
+                pass
+    return {}
+
+
+def decide_action(goal: str) -> dict:
+    """
+    Take a screenshot of the current page and ask the VLM what to do next.
+    Returns a parsed action dict.
+    """
+    screenshot = snap_browser_b64()
+    prompt = f"Goal: {goal}\n\nWhat is the single next action to take? Respond in JSON only."
+    raw = _call_vlm(screenshot, _NAV_SYSTEM, prompt)
+    action = _parse_json(raw)
+    print(f"[VLM→Action] {action.get('action','?')} — {action.get('reason','')}")
+    return action if isinstance(action, dict) else {}
+
+
+def extract_jobs_from_page() -> list[dict]:
+    """
+    Take a screenshot and ask the VLM to extract all visible job listings.
+    Returns a list of job dicts.
+    """
+    screenshot = snap_browser_b64()
+    prompt = "Extract all visible job listings from this screenshot as a JSON array."
+    raw = _call_vlm(screenshot, _EXTRACT_SYSTEM, prompt)
+    result = _parse_json(raw)
+    jobs = result if isinstance(result, list) else []
+    print(f"[VLM→Extract] Found {len(jobs)} jobs on this page")
+    return jobs
+
+
+def score_job(job: dict, profile: dict) -> dict:
+    """
+    Ask VLM to score a single job against the candidate profile.
+    Returns {score, reason, good_match}.
+    """
+    screenshot = snap_browser_b64()
+    prompt = (
+        f"Job listing:\n{json.dumps(job, indent=2)}\n\n"
+        f"Candidate profile:\n"
+        f"- Titles looking for: {', '.join(profile.get('job_titles', []))}\n"
+        f"- Skills: {', '.join(profile.get('skills', []))}\n"
+        f"- Experience: {profile.get('years_experience', 1)} year(s)\n"
+        f"- Prefers: {profile.get('remote_preference', 'any')}\n"
+        f"- Avoid keywords: {', '.join(profile.get('avoid_keywords', []))}\n\n"
+        f"Score this job 1–10. Respond in JSON only."
+    )
+    raw = _call_vlm(screenshot, _SCORE_SYSTEM, prompt)
+    result = _parse_json(raw)
+    return result if isinstance(result, dict) else {"score": 5, "reason": "unknown", "good_match": True}
 
 ```
 
@@ -1229,6 +2311,129 @@ def get_system_prompt() -> str:
 
 if __name__ == "__main__":
     print(get_system_prompt())
+
+```
+
+### main_jobhunter.py
+
+```python
+#!/usr/bin/env python3
+# main_jobhunter.py
+# ─────────────────────────────────────────────────────────────────────────────
+# Entry point for the job hunter.
+# Mirrors main.py style — same project, new MODE.
+#
+# Usage:
+#   python main_jobhunter.py             ← runs full scheduled hunt (all day)
+#   python main_jobhunter.py --once      ← runs one cycle then exits
+#   python main_jobhunter.py --site linkedin  ← hunt one site only
+#   python main_jobhunter.py --stats     ← show DB stats and exit
+# ─────────────────────────────────────────────────────────────────────────────
+
+import sys
+import argparse
+
+
+def main():
+    parser = argparse.ArgumentParser(description="AI Job Hunter")
+    parser.add_argument("--once",  action="store_true", help="Run one hunt cycle then exit")
+    parser.add_argument("--site",  type=str, default=None, help="Hunt one specific site only")
+    parser.add_argument("--stats", action="store_true", help="Show DB stats and exit")
+    args = parser.parse_args()
+
+    # ── Stats mode ─────────────────────────────────────────────────────────
+    if args.stats:
+        from jobhunter.storage import get_stats
+        from jobhunter.config import CSV_PATH, DB_PATH
+        stats = get_stats()
+        print(f"\n{'='*40}")
+        print(f"  Job Hunter Stats")
+        print(f"{'='*40}")
+        print(f"  Total jobs in DB : {stats['total']}")
+        print(f"  Found today      : {stats['today']}")
+        print(f"  CSV file         : {CSV_PATH}")
+        print(f"  DB file          : {DB_PATH}")
+        if stats["top_3"]:
+            print(f"\n  Top matches:")
+            for title, company, score in stats["top_3"]:
+                print(f"    ★{score}  {title} @ {company}")
+        print(f"{'='*40}\n")
+        return
+
+    # ── Ensure VLM server is running ────────────────────────────────────────
+    _check_vlm_server()
+
+    # ── Load profile ────────────────────────────────────────────────────────
+    from jobhunter.profile import PROFILE, SEARCH_QUERIES
+    from jobhunter.logger import log
+
+    log(f"Profile loaded: {PROFILE['name']}")
+    log(f"Looking for: {', '.join(PROFILE['job_titles'][:2])}...")
+
+    # ── Single site mode ────────────────────────────────────────────────────
+    if args.site:
+        site = args.site.lower()
+        queries = SEARCH_QUERIES.get(site)
+        if not queries:
+            print(f"Unknown site '{site}'. Available: {list(SEARCH_QUERIES.keys())}")
+            sys.exit(1)
+        from jobhunter.agent import hunt_site
+        from jobhunter.browser import release_browser
+        try:
+            total = 0
+            for q in queries:
+                total += hunt_site(site, q, PROFILE)
+            log(f"Done. {total} new jobs saved from {site}.")
+        finally:
+            release_browser()
+        return
+
+    # ── One-shot mode ───────────────────────────────────────────────────────
+    if args.once:
+        from jobhunter.agent import run_full_hunt
+        from jobhunter.browser import release_browser
+        try:
+            result = run_full_hunt(PROFILE, SEARCH_QUERIES)
+            print(f"\nDone. {result['new_this_run']} new jobs saved.")
+            print(f"Check: {__import__('jobhunter.config', fromlist=['CSV_PATH']).CSV_PATH}")
+        finally:
+            release_browser()
+        return
+
+    # ── Scheduled all-day mode (default) ────────────────────────────────────
+    from jobhunter.scheduler import start_scheduler
+    from jobhunter.browser import release_browser
+    try:
+        start_scheduler()
+    except KeyboardInterrupt:
+        print("\n\nStopped by user.")
+    finally:
+        release_browser()
+
+
+def _check_vlm_server():
+    """Verify your llama-server (VLM) is running before we start."""
+    import requests
+    from jobhunter.config import VLM_SERVER_PORT
+
+    url = f"http://localhost:{VLM_SERVER_PORT}/health"
+    try:
+        r = requests.get(url, timeout=3)
+        if r.status_code == 200:
+            print(f"[VLM] Server running on port {VLM_SERVER_PORT} ✓")
+            return
+    except Exception:
+        pass
+
+    print(f"\n[ERROR] VLM server not running on port {VLM_SERVER_PORT}.")
+    print("Start it first with:")
+    print(f"  llama-server -m <your-model.gguf> --mmproj <mmproj.gguf> -ngl 99 -c 2048 --port {VLM_SERVER_PORT}")
+    print("\nOr run your existing app first with MODE='vision_text' which starts the server.")
+    sys.exit(1)
+
+
+if __name__ == "__main__":
+    main()
 
 ```
 
@@ -1787,8 +2992,19 @@ jiwer
 silero-vad
 noisereduce
 pynput
+mlx-audio
+opencv-python
+playwright 
+schedule 
+# playwright install chromium
+browser-cookie3
 
 ```
+
+### sentence_04.wav
+
+(Skipped: binary or unreadable file)
+
 
 ### server/__init__.py
 
@@ -2445,1329 +3661,7 @@ def teardown_session(session: dict) -> None:
 
 ```
 
-### tests/benchmark_stt.py
-
-```python
-"""
-tests/benchmark_stt.py
-======================
-Record ONCE, benchmark FOREVER.
-
-First run  → records your voice for each sentence, saves to tests/recordings/
-Every run after → loads the saved WAVs and runs them through the live pipeline
-
-This means every time you tweak config/vad.py or the pipeline, you re-run
-the same audio and get apples-to-apples latency + accuracy numbers.
-
-Usage:
-    python tests/benchmark_stt.py              # auto: record if missing, else replay
-    python tests/benchmark_stt.py --record     # force re-record everything
-    python tests/benchmark_stt.py --replay     # force replay only (no mic needed)
-    python tests/benchmark_stt.py --sentence 3 # only sentence #3
-"""
-
-import sys
-import time
-import argparse
-import threading
-from pathlib import Path
-
-# ── always run from project root ──────────────────────────────
-ROOT = Path(__file__).parent.parent
-sys.path.insert(0, str(ROOT))
-
-RECORDINGS_DIR = ROOT / "tests" / "recordings"
-RECORDINGS_DIR.mkdir(parents=True, exist_ok=True)
-
-import numpy as np
-import sounddevice as sd
-import soundfile as sf
-from colorama import Fore, Style, init as colorama_init
-
-colorama_init()
-
-# ── project imports ────────────────────────────────────────────
-from config.vad import (
-    RECORD_SAMPLE_RATE,
-    PAUSE_SECONDS,
-    MIN_SPEECH_SEC,
-    PREROLL_SECONDS,
-    ENERGY_THRESHOLD,
-    SILERO_THRESHOLD,
-    TRANSCRIBE_EVERY,
-)
-from config.whisper import WHISPER_SAMPLE_RATE
-from audio.transform.resample import resample
-from audio.transform.normalise import normalise
-from transcription.model.singleton import get_model
-from transcription.stream.final import run_final_pass
-from transcription.stream.buffer import (
-    create_buffer,
-    append as buf_append,
-    clear_buffer,
-)
-from transcription.hallucination.confidence import passes_confidence
-from transcription.hallucination.noise import clean_text
-from transcription.hallucination.repetition import has_repetition
-import whisper as _whisper
-
-# ── sentences ──────────────────────────────────────────────────
-SENTENCES = [
-    "open the calendar and show me this week",
-    "what is the weather like today",
-    "set a reminder for tomorrow at nine am",
-    "send a message to John saying I will be late",
-    "search the web for latest AI news",
-    "turn off the lights in the living room",
-    "call mom when you get a chance",
-    "how long does it take to drive to the airport",
-    "play some music on spotify",
-    "the quick brown fox jumps over the lazy dog",
-]
-
-RECORD_SECONDS = 5  # window given to speak each sentence
-COUNTDOWN_SEC = 3
-
-
-# ── terminal helpers ───────────────────────────────────────────
-def c(color, msg):
-    return f"{color}{msg}{Style.RESET_ALL}"
-
-
-def ok(m):
-    print(f"  {c(Fore.GREEN,  '✓')}  {m}")
-
-
-def fail(m):
-    print(f"  {c(Fore.RED,    '✗')}  {m}")
-
-
-def info(m):
-    print(f"  {c(Fore.CYAN,   '→')}  {m}")
-
-
-def warn(m):
-    print(f"  {c(Fore.YELLOW, '!')}  {m}")
-
-
-def head(m):
-    print(f"\n  {c(Fore.YELLOW + Style.BRIGHT, m)}")
-
-
-def rule():
-    print(f"  {'─' * 60}")
-
-
-def countdown(n: int) -> None:
-    for i in range(n, 0, -1):
-        print(f"\r  {c(Fore.RED, f'Starting in {i}...')}", end="", flush=True)
-        time.sleep(1)
-    print("\r" + " " * 30 + "\r", end="")
-
-
-# ── WER ────────────────────────────────────────────────────────
-def _norm(text: str) -> str:
-    import re
-
-    text = text.lower().strip()
-    text = re.sub(r"[^\w\s]", "", text)
-    text = text.replace("i'll", "i will").replace("i'm", "i am")
-    text = text.replace("9am", "nine am").replace("9 am", "nine am")
-    return text
-
-
-def wer_score(ref: str, hyp: str) -> float:
-    if not hyp:
-        return 1.0
-    try:
-        import jiwer
-
-        return jiwer.wer(_norm(ref), _norm(hyp))
-    except ImportError:
-        r, h = _norm(ref).split(), _norm(hyp).split()
-        d = [[0] * (len(h) + 1) for _ in range(len(r) + 1)]
-        for i in range(len(r) + 1):
-            d[i][0] = i
-        for j in range(len(h) + 1):
-            d[0][j] = j
-        for i in range(1, len(r) + 1):
-            for j in range(1, len(h) + 1):
-                d[i][j] = min(
-                    d[i - 1][j] + 1,
-                    d[i][j - 1] + 1,
-                    d[i - 1][j - 1] + (0 if r[i - 1] == h[j - 1] else 1),
-                )
-        return d[len(r)][len(h)] / max(len(r), 1)
-
-
-# ── recording path for a sentence index ───────────────────────
-def wav_path(idx: int) -> Path:
-    return RECORDINGS_DIR / f"sentence_{idx+1:02d}.wav"
-
-
-# ── record one sentence to disk ────────────────────────────────
-def record_sentence(idx: int, sentence: str) -> np.ndarray:
-    path = wav_path(idx)
-    print(f"\n  [{idx+1}/{len(SENTENCES)}] Say: {c(Fore.CYAN, sentence)}")
-    countdown(COUNTDOWN_SEC)
-    print(f"  {c(Fore.RED, '● REC')}  speak now ({RECORD_SECONDS}s)", flush=True)
-
-    audio = sd.rec(
-        int(RECORD_SECONDS * RECORD_SAMPLE_RATE),
-        samplerate=RECORD_SAMPLE_RATE,
-        channels=1,
-        dtype="float32",
-    )
-    sd.wait()
-    audio = audio[:, 0]
-
-    sf.write(str(path), audio, RECORD_SAMPLE_RATE)
-    ok(f"Saved → {path.relative_to(ROOT)}")
-    return audio
-
-
-# ── load saved recording ───────────────────────────────────────
-def load_sentence(idx: int) -> np.ndarray:
-    audio, sr = sf.read(str(wav_path(idx)), dtype="float32")
-    if audio.ndim > 1:
-        audio = audio[:, 0]
-    if sr != RECORD_SAMPLE_RATE:
-        audio = resample(audio, sr, RECORD_SAMPLE_RATE)
-    return audio
-
-
-# ── silence trimmer — mimics what VAD does in real use ────────
-def trim_silence(audio: np.ndarray, sr: int, pad_ms: int = 150) -> np.ndarray:
-    """
-    Adaptive silence trim based on the recording's own noise floor.
-    Uses bottom 20% of frame energies as silence baseline, cuts frames
-    below 4x that level. Matches what VAD actually sends to Whisper.
-    """
-    frame = int(sr * 0.02)  # 20ms
-    hop = frame // 2
-    pad = int(sr * pad_ms / 1000)
-
-    frames = [audio[i : i + frame] for i in range(0, len(audio) - frame, hop)]
-    if not frames:
-        return audio
-
-    energies = np.array([np.sqrt(np.mean(f**2)) for f in frames])
-
-    # noise floor = 20th percentile of all frame energies
-    noise_floor = np.percentile(energies, 20)
-    threshold = max(noise_floor * 4.0, 1e-4)  # 4x noise floor, minimum guard
-
-    speech = energies > threshold
-    if not speech.any():
-        return audio  # nothing above noise — return as-is
-
-    first = max(0, speech.argmax() * hop - pad)
-    last = min(len(audio), (len(speech) - speech[::-1].argmax()) * hop + pad)
-    return audio[first:last]
-
-
-# ── run audio through the live pipeline, measure everything ───
-def run_pipeline(audio: np.ndarray) -> dict:
-    """
-    Feed raw recorded audio (at RECORD_SAMPLE_RATE) through the real
-    resample → normalise → whisper pipeline and return timing + text.
-    Silence is trimmed first to match what VAD sends at runtime.
-    """
-    # 1. trim silence — matches real VAD behaviour
-    audio_trimmed = trim_silence(audio, RECORD_SAMPLE_RATE)
-    audio_duration_ms = len(audio_trimmed) / RECORD_SAMPLE_RATE * 1000
-
-    # 2. resample + normalise
-    t_pre = time.perf_counter()
-    audio_16k = resample(audio_trimmed, RECORD_SAMPLE_RATE, WHISPER_SAMPLE_RATE)
-    audio_16k = normalise(audio_16k)
-    preprocess_ms = (time.perf_counter() - t_pre) * 1000
-
-    # 2. whisper inference
-    model = get_model()
-    from config.vad import (
-        NO_SPEECH_THRESHOLD,
-        LOGPROB_THRESHOLD,
-        COMPRESSION_RATIO_THRESHOLD,
-    )
-    from config.whisper import WHISPER_DEVICE
-
-    t_whisper = time.perf_counter()
-    from transcription.model.lock import infer_lock
-
-    with infer_lock:
-        result = _whisper.transcribe(
-            model,
-            audio_16k,
-            language="en",
-            fp16=(WHISPER_DEVICE == "cuda"),
-            temperature=0,
-            condition_on_previous_text=False,
-            no_speech_threshold=NO_SPEECH_THRESHOLD,
-            compression_ratio_threshold=COMPRESSION_RATIO_THRESHOLD,
-            logprob_threshold=LOGPROB_THRESHOLD,
-        )
-    whisper_ms = (time.perf_counter() - t_whisper) * 1000
-
-    # 3. hallucination filters
-    text = ""
-    passed_confidence = passes_confidence(result)
-    raw_text = clean_text(result.get("text", ""))
-    if passed_confidence and raw_text and not has_repetition(raw_text):
-        text = raw_text
-
-    # no_speech_prob from segments
-    segs = result.get("segments", [])
-    avg_no_speech = (
-        sum(s.get("no_speech_prob", 0) for s in segs) / len(segs) if segs else 0.0
-    )
-
-    return {
-        "text": text,
-        "raw_text": result.get("text", "").strip(),
-        "whisper_ms": whisper_ms,
-        "preprocess_ms": preprocess_ms,
-        "audio_duration_ms": audio_duration_ms,
-        "passed_confidence": passed_confidence,
-        "avg_no_speech": avg_no_speech,
-        "segments": len(segs),
-    }
-
-
-# ── benchmark one sentence ─────────────────────────────────────
-def benchmark_sentence(idx: int, audio: np.ndarray) -> dict:
-    sentence = SENTENCES[idx]
-    r = run_pipeline(audio)
-    score = wer_score(sentence, r["text"])
-
-    # e2e = preprocess + whisper  (VAD pause is real-world overhead, not pipeline)
-    e2e_ms = r["preprocess_ms"] + r["whisper_ms"]
-
-    r["ref"] = sentence
-    r["wer"] = score
-    r["e2e_ms"] = e2e_ms
-    return r
-
-
-# ── print one result ───────────────────────────────────────────
-def print_result(idx: int, r: dict) -> None:
-    ref = SENTENCES[idx]
-    hyp = r["text"]
-
-    wer_c = (
-        Fore.GREEN if r["wer"] < 0.1 else Fore.YELLOW if r["wer"] < 0.3 else Fore.RED
-    )
-    wsp_c = (
-        Fore.GREEN
-        if r["whisper_ms"] < 600
-        else Fore.YELLOW if r["whisper_ms"] < 1200 else Fore.RED
-    )
-    e2e_c = (
-        Fore.GREEN
-        if r["e2e_ms"] < 700
-        else Fore.YELLOW if r["e2e_ms"] < 1400 else Fore.RED
-    )
-    nsp_c = (
-        Fore.GREEN
-        if r["avg_no_speech"] < 0.3
-        else Fore.YELLOW if r["avg_no_speech"] < 0.45 else Fore.RED
-    )
-
-    print(f"\n  [{idx+1}] {c(Fore.CYAN, ref)}")
-    if hyp:
-        print(f"       {c(Fore.WHITE, hyp)}")
-    else:
-        print(f"       {c(Fore.RED, '(no transcript)')}")
-        if r["raw_text"]:
-            print(f"       raw: {c(Fore.YELLOW, r['raw_text'])}")
-
-    dur_str = f"{r['audio_duration_ms']:.0f} ms"
-    wsp_str = f"{r['whisper_ms']:.0f} ms"
-    e2e_str = f"{r['e2e_ms']:.0f} ms"
-    wer_str = f"{r['wer']:.0%}"
-    nsp_str = f"{r['avg_no_speech']:.2f}  (limit={__import__('config.vad', fromlist=['NO_SPEECH_THRESHOLD']).NO_SPEECH_THRESHOLD})"
-
-    info(f"Audio to Whisper  : {dur_str}  (trimmed from 5s)")
-    info(f"Whisper inference : {c(wsp_c, wsp_str)}")
-    info(f"Preprocess        : {r['preprocess_ms']:.0f} ms")
-    info(f"Pipeline total    : {c(e2e_c, e2e_str)}")
-    info(f"no_speech_prob    : {c(nsp_c, nsp_str)}")
-    info(f"WER               : {c(wer_c, wer_str)}")
-    if not r["passed_confidence"]:
-        warn(
-            f"REJECTED by confidence filter — speak louder/clearer or raise NO_SPEECH_THRESHOLD"
-        )
-
-
-# ── summary ────────────────────────────────────────────────────
-def print_summary(results: list[dict]) -> None:
-    head("SUMMARY")
-    print()
-
-    detected = [r for r in results if r["text"]]
-    wsp = [r["whisper_ms"] for r in detected]
-    e2e = [r["e2e_ms"] for r in detected]
-    wers = [r["wer"] for r in detected]
-
-    def stat(vals, unit="ms"):
-        if not vals:
-            return "no data"
-        avg = sum(vals) / len(vals)
-        mn = min(vals)
-        mx = max(vals)
-        return f"avg {avg:.0f}{unit}  min {mn:.0f}{unit}  max {mx:.0f}{unit}"
-
-    rule()
-    print(f"  {'Whisper inference':<26} {stat(wsp)}")
-    print(f"  {'Pipeline total (no VAD)':<26} {stat(e2e)}")
-    if wers:
-        avg_wer = sum(wers) / len(wers)
-        wer_c = (
-            Fore.GREEN if avg_wer < 0.1 else Fore.YELLOW if avg_wer < 0.3 else Fore.RED
-        )
-        print(f"  {'WER':<26} {c(wer_c, f'avg {avg_wer:.1%}')}")
-    print(f"  {'Detection rate':<26} {len(detected)}/{len(results)}")
-    rule()
-
-    # real-world E2E estimate
-    pause_ms = PAUSE_SECONDS * 1000
-    avg_wsp = sum(wsp) / len(wsp) if wsp else 0
-    est_e2e = pause_ms + avg_wsp
-    print(f"\n  Real-world E2E estimate:")
-    print(f"    PAUSE_SECONDS overhead : {pause_ms:.0f} ms   (config/vad.py)")
-    print(f"    Whisper avg            : {avg_wsp:.0f} ms")
-    print(f"    ─────────────────────────────────")
-    e2e_color = (
-        Fore.GREEN if est_e2e < 1200 else Fore.YELLOW if est_e2e < 2000 else Fore.RED
-    )
-    print(f"    Estimated felt latency : {c(e2e_color, f'{est_e2e:.0f} ms')}")
-
-    # diagnosis
-    head("DIAGNOSIS")
-    print()
-    any_rec = False
-
-    if wsp:
-        avg = sum(wsp) / len(wsp)
-        if avg > 1200:
-            warn(
-                f"Whisper is SLOW ({avg:.0f}ms). Try WHISPER_MODEL_NAME='tiny' in config/whisper.py"
-            )
-            any_rec = True
-        elif avg > 600:
-            warn(f"Whisper is moderate ({avg:.0f}ms). 'tiny' model would cut this ~50%")
-            any_rec = True
-        else:
-            ok(f"Whisper is fast ({avg:.0f}ms avg)")
-
-    if PAUSE_SECONDS > 0.6:
-        warn(
-            f"PAUSE_SECONDS={PAUSE_SECONDS} — dominates latency. Lower to 0.4–0.5 for ~{(PAUSE_SECONDS-0.45)*1000:.0f}ms gain"
-        )
-        any_rec = True
-    elif PAUSE_SECONDS > 0.4:
-        warn(f"PAUSE_SECONDS={PAUSE_SECONDS} — try 0.4 for tighter cutoff")
-        any_rec = True
-    else:
-        ok(f"PAUSE_SECONDS={PAUSE_SECONDS} is aggressive (good)")
-
-    miss = len(results) - len(detected)
-    if miss > 0:
-        warn(
-            f"{miss} sentences not detected — VAD may be too strict or recordings too quiet"
-        )
-        any_rec = True
-
-    if not any_rec:
-        ok("Pipeline is well tuned. Paste numbers below to get further advice.")
-
-    # paste block
-    head("NUMBERS TO PASTE")
-    print()
-    print(
-        f"  PAUSE_SECONDS={PAUSE_SECONDS}  SILERO_THRESHOLD={SILERO_THRESHOLD}  TRANSCRIBE_EVERY={TRANSCRIBE_EVERY}"
-    )
-    if wsp:
-        print(
-            f"  whisper_avg={sum(wsp)/len(wsp):.0f}ms  min={min(wsp):.0f}ms  max={max(wsp):.0f}ms"
-        )
-    if e2e:
-        print(f"  pipeline_avg={sum(e2e)/len(e2e):.0f}ms  felt_e2e_est={est_e2e:.0f}ms")
-    if wers:
-        print(
-            f"  wer_avg={sum(wers)/len(wers):.1%}  detection={len(detected)}/{len(results)}"
-        )
-    print()
-
-
-# ── main ───────────────────────────────────────────────────────
-def main():
-    parser = argparse.ArgumentParser()
-    parser.add_argument(
-        "--record",
-        action="store_true",
-        help="Force re-record all sentences (overwrites saved WAVs)",
-    )
-    parser.add_argument(
-        "--replay", action="store_true", help="Force replay mode — never touch the mic"
-    )
-    parser.add_argument(
-        "--sentence",
-        type=int,
-        default=0,
-        help="Only run sentence N (1-based). Default: all.",
-    )
-    args = parser.parse_args()
-
-    # figure out which sentences to process
-    indices = [args.sentence - 1] if args.sentence else list(range(len(SENTENCES)))
-
-    # print config header
-    head("STT BENCHMARK  —  record-once, replay-forever")
-    print()
-    print(f"  Recordings dir : {RECORDINGS_DIR.relative_to(ROOT)}")
-    print(f"  Config snapshot:")
-    print(
-        f"    PAUSE_SECONDS    = {c(Fore.CYAN, PAUSE_SECONDS)}   ← adds this to every utterance"
-    )
-    print(f"    SILERO_THRESHOLD = {c(Fore.CYAN, SILERO_THRESHOLD)}")
-    print(f"    TRANSCRIBE_EVERY = {c(Fore.CYAN, TRANSCRIBE_EVERY)}")
-    print(
-        f"    WHISPER_MODEL    = {c(Fore.CYAN, __import__('config.whisper', fromlist=['WHISPER_MODEL_NAME']).WHISPER_MODEL_NAME)}"
-    )
-    rule()
-
-    # load whisper
-    print(f"\n  Loading Whisper...")
-    get_model()
-    ok("Whisper ready")
-    # warm up scipy resampler — kills JIT hit on first sentence
-    resample(
-        np.zeros(int(RECORD_SAMPLE_RATE * 0.02), dtype=np.float32),
-        RECORD_SAMPLE_RATE,
-        WHISPER_SAMPLE_RATE,
-    )
-    ok("Resampler warmed up")
-
-    results: list[dict] = [None] * len(SENTENCES)
-
-    for idx in indices:
-        sentence = SENTENCES[idx]
-        path = wav_path(idx)
-
-        # decide: record or load
-        if args.replay and not path.exists():
-            warn(f"[{idx+1}] No recording found at {path.name} — skipping")
-            continue
-
-        if args.record or not path.exists():
-            # record mode
-            if args.replay:
-                warn(f"[{idx+1}] --replay set but no file — skipping")
-                continue
-            if not path.exists():
-                info(f"[{idx+1}] No recording found — recording now")
-            audio = record_sentence(idx, sentence)
-        else:
-            info(f"[{idx+1}] Loading saved recording: {path.name}")
-            audio = load_sentence(idx)
-
-        # benchmark
-        r = benchmark_sentence(idx, audio)
-        results[idx] = r
-        print_result(idx, r)
-        rule()
-
-    # summary over completed results
-    completed = [r for r in results if r is not None]
-    if len(completed) > 1:
-        print_summary(completed)
-    elif len(completed) == 1:
-        # single sentence — still show estimate
-        r = completed[0]
-        pause_ms = PAUSE_SECONDS * 1000
-        est = pause_ms + r["whisper_ms"]
-        print(
-            f"\n  Felt latency estimate: {pause_ms:.0f}ms (pause) + {r['whisper_ms']:.0f}ms (whisper) = {c(Fore.CYAN, f'{est:.0f}ms')}"
-        )
-
-
-if __name__ == "__main__":
-    main()
-
-```
-
-### tests/benchmark_tts.py
-
-```python
-"""
-tests/benchmark_tts.py
-======================
-Full end-to-end pipeline benchmark: WAV → Whisper → LLM → TTS → playback
-
-Mirrors _run_full() in main.py exactly, but:
-  - Feeds pre-recorded WAVs instead of live mic (uses tests/recordings/)
-  - Captures every latency segment
-  - Measures TTS smoothness: chunk count, inter-chunk gaps, words-per-chunk
-  - Prints a colour-coded report with diagnosis + tuning advice
-
-Usage:
-    python tests/benchmark_tts.py                  # all 10 sentences
-    python tests/benchmark_tts.py --sentence 3     # only sentence #3
-    python tests/benchmark_tts.py --no-audio       # skip actual playback (latency only)
-    python tests/benchmark_tts.py --no-llm         # feed fixed text directly to TTS
-    python tests/benchmark_tts.py --steps 8        # override TTS diffusion steps
-    python tests/benchmark_tts.py --tts-text "Hello world, this is a test."
-
-Pre-requisite: run benchmark_stt.py first so tests/recordings/ exists.
-"""
-
-import sys
-import time
-import argparse
-import threading
-from pathlib import Path
-from dataclasses import dataclass, field
-
-ROOT = Path(__file__).parent.parent
-sys.path.insert(0, str(ROOT))
-
-import numpy as np
-import soundfile as sf
-from colorama import Fore, Style, init as colorama_init
-
-colorama_init()
-
-from config.vad import RECORD_SAMPLE_RATE, PAUSE_SECONDS
-from config.whisper import WHISPER_SAMPLE_RATE
-from config.tts import (
-    SUPERTONIC_VOICE,
-    SUPERTONIC_SPEED,
-    SUPERTONIC_STEPS,
-    SUPERTONIC_LANGUAGE,
-)
-
-RECORDINGS_DIR = ROOT / "tests" / "recordings"
-
-SENTENCES = [
-    "open the calendar and show me this week",
-    "what is the weather like today",
-    "set a reminder for tomorrow at nine am",
-    "send a message to John saying I will be late",
-    "search the web for latest AI news",
-    "turn off the lights in the living room",
-    "call mom when you get a chance",
-    "how long does it take to drive to the airport",
-    "play some music on spotify",
-    "the quick brown fox jumps over the lazy dog",
-]
-
-
-# ─────────────────────────────────────────────────────────────
-# Terminal helpers
-# ─────────────────────────────────────────────────────────────
-
-
-def c(color, msg):
-    return f"{color}{msg}{Style.RESET_ALL}"
-
-
-def ok(m):
-    print(f"  {c(Fore.GREEN,  '✓')}  {m}")
-
-
-def fail(m):
-    print(f"  {c(Fore.RED,    '✗')}  {m}")
-
-
-def info(m):
-    print(f"  {c(Fore.CYAN,   '→')}  {m}")
-
-
-def warn(m):
-    print(f"  {c(Fore.YELLOW, '!')}  {m}")
-
-
-def head(m):
-    print(f"\n  {c(Fore.YELLOW + Style.BRIGHT, m)}")
-
-
-def rule():
-    print(f"  {'─' * 66}")
-
-
-def ms_c(ms, green=300, yellow=700):
-    return Fore.GREEN if ms < green else Fore.YELLOW if ms < yellow else Fore.RED
-
-
-def tag(label, val, color=Fore.WHITE):
-    print(f"  {label:<36} {c(color, val)}")
-
-
-# ─────────────────────────────────────────────────────────────
-# Result container
-# ─────────────────────────────────────────────────────────────
-
-
-@dataclass
-class BenchResult:
-    sentence_idx: int
-    input_text: str
-    stt_text: str = ""
-    llm_text: str = ""
-
-    stt_ms: float = 0.0
-    llm_first_token_ms: float = 0.0
-    llm_total_ms: float = 0.0
-    tts_first_chunk_ms: float = 0.0
-    tts_total_ms: float = 0.0
-    e2e_ms: float = 0.0
-
-    chunk_count: int = 0
-    chunk_sizes_words: list = field(default_factory=list)
-    chunk_gen_times_ms: list = field(default_factory=list)
-    inter_chunk_gaps_ms: list = field(default_factory=list)
-
-    filler_text: str = ""
-    filler_gen_ms: float = 0.0
-    filler_duration_ms: float = 0.0
-    filler_covers_llm: bool = False
-
-    stt_passed: bool = True
-    error: str = ""
-
-
-# ─────────────────────────────────────────────────────────────
-# Instrumented TTS engine
-# ─────────────────────────────────────────────────────────────
-
-
-class InstrumentedTTSEngine:
-    def __init__(self, voice, speed, steps, language, play_fn):
-        self.voice = voice
-        self.speed = speed
-        self.steps = steps
-        self.language = language
-        self.play_fn = play_fn
-        self._chunks: list[str] = []
-
-    def enqueue(self, text: str):
-        if text.strip():
-            self._chunks.append(text.strip())
-
-    def run(self) -> dict:
-        from tts.generate.pipeline import generate_one
-        from tts.model.singleton import get_model
-        from tts.text.clean import clean_markdown
-
-        sr = get_model()["sample_rate"]
-        chunk_gen_times, inter_chunk_gaps = [], []
-        prev_end = None
-        total_start = time.perf_counter()
-
-        for text in self._chunks:
-            cleaned = clean_markdown(text)
-            if not cleaned:
-                continue
-            if prev_end is not None:
-                inter_chunk_gaps.append((time.perf_counter() - prev_end) * 1000)
-
-            t0 = time.perf_counter()
-            audio = generate_one(
-                cleaned,
-                voice=self.voice,
-                speed=self.speed,
-                steps=self.steps,
-                language=self.language,
-            )
-            gen_ms = (time.perf_counter() - t0) * 1000
-            chunk_gen_times.append(gen_ms)
-            self.play_fn(audio, sr)
-            prev_end = time.perf_counter()
-
-        return {
-            "chunk_count": len(self._chunks),
-            "chunk_sizes_words": [len(ch.split()) for ch in self._chunks],
-            "chunk_gen_times_ms": chunk_gen_times,
-            "inter_chunk_gaps_ms": inter_chunk_gaps,
-            "tts_first_chunk_ms": chunk_gen_times[0] if chunk_gen_times else 0.0,
-            "tts_total_ms": (time.perf_counter() - total_start) * 1000,
-        }
-
-
-# ─────────────────────────────────────────────────────────────
-# Feed LLM tokens to engine (mirrors optimised feed.py)
-# ─────────────────────────────────────────────────────────────
-
-
-def feed_tokens_to_engine(engine: InstrumentedTTSEngine, token_gen) -> tuple:
-    from tts.text.split import split_sentence, MIN_CHUNK_CHARS
-
-    WORD_FLUSH_THRESHOLD = 6
-    MIN_SEND_CHARS = 20
-
-    buf, full = "", ""
-    first_token_ms = None
-    t_start = time.perf_counter()
-
-    for token in token_gen:
-        if first_token_ms is None:
-            first_token_ms = (time.perf_counter() - t_start) * 1000
-        buf += token
-        full += token
-
-        while True:
-            sentence, remainder = split_sentence(buf)
-            if sentence and len(sentence) >= MIN_SEND_CHARS:
-                engine.enqueue(sentence)
-                buf = remainder
-            else:
-                break
-
-        if len(buf.split()) >= WORD_FLUSH_THRESHOLD:
-            engine.enqueue(buf.strip())
-            buf = ""
-
-    if buf.strip() and len(buf.strip()) >= 2:
-        engine.enqueue(buf.strip())
-
-    llm_total_ms = (time.perf_counter() - t_start) * 1000
-    return full, first_token_ms or llm_total_ms, llm_total_ms
-
-
-# ─────────────────────────────────────────────────────────────
-# STT
-# ─────────────────────────────────────────────────────────────
-
-
-def run_stt(wav_path: Path) -> tuple:
-    from audio.transform.resample import resample
-    from audio.transform.normalise import normalise
-    from transcription.model.singleton import get_model
-    from transcription.model.lock import infer_lock
-    from transcription.hallucination.confidence import passes_confidence
-    from transcription.hallucination.noise import clean_text
-    from transcription.hallucination.repetition import has_repetition
-    from transcription.transcribe.options import build_whisper_options
-    import whisper as _whisper
-
-    audio, sr = sf.read(str(wav_path), dtype="float32")
-    if audio.ndim > 1:
-        audio = audio[:, 0]
-    if sr != RECORD_SAMPLE_RATE:
-        audio = resample(audio, sr, RECORD_SAMPLE_RATE)
-    audio_16k = resample(audio, RECORD_SAMPLE_RATE, WHISPER_SAMPLE_RATE)
-    audio_16k = normalise(audio_16k)
-
-    model = get_model()
-    opts = build_whisper_options()
-    t0 = time.perf_counter()
-    with infer_lock:
-        result = _whisper.transcribe(model, audio_16k, **opts)
-    stt_ms = (time.perf_counter() - t0) * 1000
-
-    passed = passes_confidence(result)
-    text = ""
-    if passed:
-        raw = clean_text(result.get("text", ""))
-        if raw and not has_repetition(raw):
-            text = raw
-    return text, stt_ms, passed
-
-
-# ─────────────────────────────────────────────────────────────
-# Full pipeline for one sentence
-# ─────────────────────────────────────────────────────────────
-
-
-def benchmark_one(idx: int, args, play_fn) -> BenchResult:
-    r = BenchResult(sentence_idx=idx, input_text=SENTENCES[idx])
-    wav = RECORDINGS_DIR / f"sentence_{idx+1:02d}.wav"
-
-    if not wav.exists():
-        r.error = f"No recording at {wav.name} — run benchmark_stt.py first"
-        return r
-
-    e2e_start = time.perf_counter()
-
-    # ── STT ─────────────────────────────────────────────────
-    if args.no_llm and args.tts_text:
-        r.stt_text = args.tts_text
-    else:
-        try:
-            r.stt_text, r.stt_ms, r.stt_passed = run_stt(wav)
-        except Exception as e:
-            r.error = f"STT error: {e}"
-            return r
-        if not r.stt_text:
-            r.error = "STT: no transcript"
-            return r
-
-    # ── Filler measurement ───────────────────────────────────
-    try:
-        from tts.generate.pipeline import generate_one
-        from tts.model.singleton import get_model
-
-        # Pick the longest filler to test coverage
-        from tts.engine.state import _FILLERS
-
-        filler_text = max(_FILLERS, key=len)
-        r.filler_text = filler_text
-        t_fil = time.perf_counter()
-        filler_audio = generate_one(
-            filler_text,
-            voice=args.voice,
-            speed=args.speed,
-            steps=args.steps,
-            language=args.language,
-        )
-        r.filler_gen_ms = (time.perf_counter() - t_fil) * 1000
-        sr = get_model()["sample_rate"]
-        r.filler_duration_ms = len(filler_audio) / sr * 1000
-    except Exception as e:
-        warn(f"Filler measurement failed: {e}")
-
-    # ── LLM + TTS feed ──────────────────────────────────────
-    engine = InstrumentedTTSEngine(
-        voice=args.voice,
-        speed=args.speed,
-        steps=args.steps,
-        language=args.language,
-        play_fn=play_fn,
-    )
-
-    if args.no_llm:
-
-        def _fixed():
-            for w in (args.tts_text or r.stt_text).split():
-                yield w + " "
-
-        token_gen = _fixed()
-    else:
-        from llm.inference.stream import stream_response
-        from llm.history.state import create_history
-
-        token_gen = stream_response(r.stt_text, create_history())
-
-    try:
-        r.llm_text, r.llm_first_token_ms, r.llm_total_ms = feed_tokens_to_engine(
-            engine, token_gen
-        )
-    except Exception as e:
-        r.error = f"LLM error: {e}"
-        return r
-
-    # ── TTS generation ───────────────────────────────────────
-    try:
-        tts_info = engine.run()
-    except Exception as e:
-        r.error = f"TTS error: {e}"
-        return r
-
-    r.chunk_count = tts_info["chunk_count"]
-    r.chunk_sizes_words = tts_info["chunk_sizes_words"]
-    r.chunk_gen_times_ms = tts_info["chunk_gen_times_ms"]
-    r.inter_chunk_gaps_ms = tts_info["inter_chunk_gaps_ms"]
-    r.tts_first_chunk_ms = tts_info["tts_first_chunk_ms"]
-    r.tts_total_ms = tts_info["tts_total_ms"]
-    r.e2e_ms = (time.perf_counter() - e2e_start) * 1000
-    r.filler_covers_llm = r.filler_duration_ms >= r.llm_first_token_ms
-
-    return r
-
-
-# ─────────────────────────────────────────────────────────────
-# Print one result
-# ─────────────────────────────────────────────────────────────
-
-
-def print_result(r: BenchResult, args) -> None:
-    n = r.sentence_idx + 1
-    print(f"\n  [{n}] {c(Fore.CYAN, r.input_text)}")
-    if r.error:
-        fail(r.error)
-        return
-
-    if not args.no_llm:
-        print(f"       STT : {c(Fore.WHITE, r.stt_text or '(empty)')}")
-    llm_preview = r.llm_text[:110] + ("…" if len(r.llm_text) > 110 else "")
-    print(f"       LLM : {c(Fore.WHITE, llm_preview)}")
-    print()
-
-    rule()
-    if not args.no_llm:
-        tag("STT (Whisper)", f"{r.stt_ms:.0f} ms", ms_c(r.stt_ms, 600, 1200))
-    tag(
-        "LLM → first token",
-        f"{r.llm_first_token_ms:.0f} ms",
-        ms_c(r.llm_first_token_ms, 500, 1500),
-    )
-    tag(
-        "LLM → full response",
-        f"{r.llm_total_ms:.0f} ms",
-        ms_c(r.llm_total_ms, 800, 2000),
-    )
-
-    if r.filler_duration_ms:
-        cover = (
-            "✓ covers LLM"
-            if r.filler_covers_llm
-            else f"✗ {r.llm_first_token_ms - r.filler_duration_ms:.0f}ms gap"
-        )
-        fil_color = Fore.GREEN if r.filler_covers_llm else Fore.RED
-        tag(
-            f"Filler ({r.filler_text!r})",
-            f"{r.filler_duration_ms:.0f} ms  [{cover}]",
-            fil_color,
-        )
-
-    tag(
-        "TTS first chunk generation",
-        f"{r.tts_first_chunk_ms:.0f} ms",
-        ms_c(r.tts_first_chunk_ms, 300, 700),
-    )
-    tag(
-        "TTS total generation",
-        f"{r.tts_total_ms:.0f} ms",
-        ms_c(r.tts_total_ms, 2000, 5000),
-    )
-
-    if not args.no_llm:
-        tag("End-to-end", f"{r.e2e_ms:.0f} ms", ms_c(r.e2e_ms, 4000, 8000))
-    rule()
-
-    print(f"\n  TTS Smoothness")
-    rule()
-    tag(
-        "Chunks generated",
-        str(r.chunk_count),
-        (
-            Fore.GREEN
-            if r.chunk_count <= 4
-            else Fore.YELLOW if r.chunk_count <= 7 else Fore.RED
-        ),
-    )
-
-    if r.chunk_sizes_words:
-        avg_w = sum(r.chunk_sizes_words) / len(r.chunk_sizes_words)
-        tag(
-            "Avg words per chunk",
-            f"{avg_w:.1f}",
-            Fore.GREEN if avg_w >= 5 else Fore.YELLOW if avg_w >= 3 else Fore.RED,
-        )
-        tag("Chunk word distribution", str(r.chunk_sizes_words))
-
-    if r.chunk_gen_times_ms:
-        avg_gen = sum(r.chunk_gen_times_ms) / len(r.chunk_gen_times_ms)
-        tag("Avg chunk gen time", f"{avg_gen:.0f} ms", ms_c(avg_gen, 300, 600))
-        tag(
-            "Per-chunk gen times (ms)",
-            "  ".join(f"{v:.0f}" for v in r.chunk_gen_times_ms),
-        )
-
-    if r.inter_chunk_gaps_ms:
-        avg_gap = sum(r.inter_chunk_gaps_ms) / len(r.inter_chunk_gaps_ms)
-        max_gap = max(r.inter_chunk_gaps_ms)
-        tag(
-            "Avg / max inter-chunk gap",
-            f"{avg_gap:.0f} ms / {max_gap:.0f} ms",
-            Fore.GREEN if max_gap < 60 else Fore.YELLOW if max_gap < 150 else Fore.RED,
-        )
-    rule()
-
-
-# ─────────────────────────────────────────────────────────────
-# Summary
-# ─────────────────────────────────────────────────────────────
-
-
-def print_summary(results: list[BenchResult], args) -> None:
-    good = [r for r in results if not r.error and r.chunk_count > 0]
-    if not good:
-        warn("No successful results.")
-        return
-
-    head("SUMMARY")
-    print()
-    rule()
-
-    def avg(vals):
-        return sum(vals) / len(vals) if vals else 0
-
-    stt_vals = [r.stt_ms for r in good]
-    ft_vals = [r.llm_first_token_ms for r in good]
-    llm_vals = [r.llm_total_ms for r in good]
-    tts1_vals = [r.tts_first_chunk_ms for r in good]
-    ttst_vals = [r.tts_total_ms for r in good]
-    e2e_vals = [r.e2e_ms for r in good]
-    gap_vals = [g for r in good for g in r.inter_chunk_gaps_ms]
-    fil_vals = [r.filler_duration_ms for r in good if r.filler_duration_ms]
-    cw_vals = [w for r in good for w in r.chunk_sizes_words]
-
-    if stt_vals and not args.no_llm:
-        a = avg(stt_vals)
-        tag("STT avg", f"{a:.0f} ms", ms_c(a, 600, 1200))
-    if ft_vals:
-        a = avg(ft_vals)
-        tag("LLM first token avg", f"{a:.0f} ms", ms_c(a, 500, 1500))
-    if llm_vals:
-        a = avg(llm_vals)
-        tag("LLM total avg", f"{a:.0f} ms", ms_c(a, 800, 2000))
-    if fil_vals:
-        a = avg(fil_vals)
-        tag("Filler duration avg", f"{a:.0f} ms")
-    if tts1_vals:
-        a = avg(tts1_vals)
-        tag("TTS first chunk avg", f"{a:.0f} ms", ms_c(a, 300, 700))
-    if ttst_vals:
-        a = avg(ttst_vals)
-        tag("TTS total avg", f"{a:.0f} ms", ms_c(a, 2000, 5000))
-    if cw_vals:
-        a = avg(cw_vals)
-        tag(
-            "Avg words/chunk",
-            f"{a:.1f}",
-            Fore.GREEN if a >= 5 else Fore.YELLOW if a >= 3 else Fore.RED,
-        )
-    if gap_vals:
-        a = avg(gap_vals)
-        mx = max(gap_vals)
-        tag(
-            "Inter-chunk gap avg/max",
-            f"{a:.0f} ms / {mx:.0f} ms",
-            Fore.GREEN if mx < 60 else Fore.YELLOW,
-        )
-    if e2e_vals and not args.no_llm:
-        a = avg(e2e_vals)
-        tag("End-to-end avg", f"{a:.0f} ms", ms_c(a, 4000, 8000))
-    rule()
-
-    head("DIAGNOSIS & TUNING ADVICE")
-    print()
-    any_rec = False
-
-    # TTS first chunk
-    if tts1_vals:
-        a = avg(tts1_vals)
-        if a > 700:
-            warn(
-                f"TTS first chunk slow ({a:.0f}ms). "
-                f"Reduce SUPERTONIC_STEPS: currently {args.steps}, try {max(6, args.steps - 3)}"
-            )
-            any_rec = True
-        elif a > 300:
-            warn(
-                f"TTS first chunk moderate ({a:.0f}ms). "
-                f"Try steps={max(6, args.steps - 2)} to cut ~30%"
-            )
-            any_rec = True
-        else:
-            ok(f"TTS first chunk fast ({a:.0f}ms)")
-
-    # Chunk fragmentation
-    if cw_vals:
-        a = avg(cw_vals)
-        counts = [r.chunk_count for r in good]
-        ac = avg(counts)
-        if a < 3:
-            warn(
-                f"Avg {a:.1f} words/chunk ({ac:.1f} chunks/response) — "
-                f"too fragmented, each chunk wastes ~350ms ONNX overhead. "
-                f"Raise WORD_FLUSH_THRESHOLD in tts/engine/feed.py"
-            )
-            any_rec = True
-        elif a >= 5:
-            ok(f"Chunk size good ({a:.1f} words avg, {ac:.1f} chunks/response)")
-        else:
-            warn(f"Chunks borderline ({a:.1f} words avg). Aim for 6+ words/chunk")
-            any_rec = True
-
-    # Filler coverage
-    if fil_vals and ft_vals:
-        avg_fil = avg(fil_vals)
-        avg_ft = avg(ft_vals)
-        if avg_fil >= avg_ft * 0.9:
-            ok(f"Filler ({avg_fil:.0f}ms) covers LLM first-token ({avg_ft:.0f}ms)")
-        else:
-            gap = avg_ft - avg_fil
-            warn(
-                f"Filler ({avg_fil:.0f}ms) shorter than LLM first-token ({avg_ft:.0f}ms) "
-                f"— {gap:.0f}ms silence gap. Longer fillers added to state.py fix this."
-            )
-            any_rec = True
-
-    # LLM speed
-    if ft_vals:
-        a = avg(ft_vals)
-        if a > 1500:
-            warn(
-                f"LLM first token {a:.0f}ms — try GPU_LAYERS=36 (max) in config/llm.py "
-                f"or a smaller model (qwen2.5-1.5b)"
-            )
-            any_rec = True
-
-    if not any_rec:
-        ok("Pipeline is well tuned!")
-
-    head("NUMBERS TO PASTE")
-    print()
-    print(f"  voice={args.voice}  speed={args.speed}  steps={args.steps}")
-    if tts1_vals:
-        print(
-            f"  tts_first_chunk_avg={avg(tts1_vals):.0f}ms  tts_total_avg={avg(ttst_vals):.0f}ms"
-        )
-    if cw_vals:
-        print(
-            f"  words_per_chunk_avg={avg(cw_vals):.1f}  chunk_count_avg={avg([r.chunk_count for r in good]):.1f}"
-        )
-    if ft_vals:
-        print(
-            f"  llm_first_token_avg={avg(ft_vals):.0f}ms  llm_total_avg={avg(llm_vals):.0f}ms"
-        )
-    if fil_vals:
-        print(f"  filler_duration_avg={avg(fil_vals):.0f}ms")
-    if e2e_vals:
-        print(f"  e2e_avg={avg(e2e_vals):.0f}ms")
-    print()
-
-
-# ─────────────────────────────────────────────────────────────
-# Main
-# ─────────────────────────────────────────────────────────────
-
-
-def main():
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--sentence", type=int, default=0)
-    parser.add_argument("--no-audio", action="store_true")
-    parser.add_argument("--no-llm", action="store_true")
-    parser.add_argument("--tts-text", type=str, default="")
-    parser.add_argument("--steps", type=int, default=SUPERTONIC_STEPS)
-    parser.add_argument("--voice", type=str, default=SUPERTONIC_VOICE)
-    parser.add_argument("--speed", type=float, default=SUPERTONIC_SPEED)
-    parser.add_argument("--language", type=str, default=SUPERTONIC_LANGUAGE)
-    args = parser.parse_args()
-
-    if args.tts_text:
-        args.no_llm = True
-
-    head("FULL PIPELINE TTS BENCHMARK")
-    print()
-    print(f"  Recordings : {RECORDINGS_DIR.relative_to(ROOT)}")
-    print(f"  Mode       : {'TTS-only' if args.no_llm else 'STT → LLM → TTS'}")
-    print(f"  Playback   : {'disabled' if args.no_audio else 'enabled'}")
-    print(f"  TTS config : voice={args.voice}  speed={args.speed}  steps={args.steps}")
-    rule()
-    print()
-
-    if not args.no_llm:
-        print("  Loading Whisper...")
-        from transcription.model.singleton import get_model as load_whisper
-
-        load_whisper()
-        ok("Whisper ready")
-        print("  Loading LLM...")
-        from llm.model.singleton import get_model as load_llm
-
-        load_llm()
-        ok("LLM ready")
-
-    print("  Loading TTS model...")
-    from tts.model.singleton import get_model as load_tts
-
-    load_tts()
-    ok("TTS ready")
-
-    print("  Warming up TTS...")
-    from tts.generate.pipeline import generate_one
-
-    _ = generate_one(
-        "Warming up.",
-        voice=args.voice,
-        speed=args.speed,
-        steps=args.steps,
-        language=args.language,
-    )
-    ok("TTS warmed up")
-    print()
-
-    play_fn = (
-        (lambda a, sr: None)
-        if args.no_audio
-        else __import__("tts.playback.stream", fromlist=["play_audio"]).play_audio
-    )
-
-    indices = [args.sentence - 1] if args.sentence else list(range(len(SENTENCES)))
-    results: list[BenchResult] = []
-
-    for idx in indices:
-        print(f"\n  Running [{idx+1}/{len(SENTENCES)}]: {c(Fore.CYAN, SENTENCES[idx])}")
-        r = benchmark_one(idx, args, play_fn)
-        results.append(r)
-        print_result(r, args)
-        rule()
-
-    completed = [r for r in results if not r.error]
-    if len(completed) > 1:
-        print_summary(completed, args)
-    elif len(completed) == 1:
-        r = completed[0]
-        print(f"\n  TTS first chunk : {r.tts_first_chunk_ms:.0f} ms")
-        print(f"  TTS total       : {r.tts_total_ms:.0f} ms")
-        print(f"  Chunks          : {r.chunk_count}  ({r.chunk_sizes_words})")
-
-
-if __name__ == "__main__":
-    main()
-
-```
-
-### tests/recordings/sentence_01.wav
-
-(Skipped: binary or unreadable file)
-
-
-### tests/recordings/sentence_02.wav
-
-(Skipped: binary or unreadable file)
-
-
-### tests/recordings/sentence_03.wav
-
-(Skipped: binary or unreadable file)
-
-
-### tests/recordings/sentence_04.wav
-
-(Skipped: binary or unreadable file)
-
-
-### tests/recordings/sentence_05.wav
-
-(Skipped: binary or unreadable file)
-
-
-### tests/recordings/sentence_06.wav
-
-(Skipped: binary or unreadable file)
-
-
-### tests/recordings/sentence_07.wav
-
-(Skipped: binary or unreadable file)
-
-
-### tests/recordings/sentence_08.wav
-
-(Skipped: binary or unreadable file)
-
-
-### tests/recordings/sentence_09.wav
-
-(Skipped: binary or unreadable file)
-
-
-### tests/recordings/sentence_10.wav
+### test_audio_000.wav
 
 (Skipped: binary or unreadable file)
 
@@ -4779,19 +4673,37 @@ from config.paths import SUPERTONIC_DIR
 
 MODEL_ID = "onnx-community/Supertonic-TTS-2-ONNX"
 
+_REQUIRED_FILES = [
+    "onnx/text_encoder.onnx",
+    "onnx/text_encoder.onnx_data",
+    "onnx/latent_denoiser.onnx",
+    "onnx/latent_denoiser.onnx_data",
+    "onnx/voice_decoder.onnx",
+    "onnx/voice_decoder.onnx_data",
+    "tokenizer.json",
+]
+
 
 def ensure_downloaded() -> str:
-    """Download Supertonic 2 ONNX into models/supertonic/ if missing."""
-    marker = SUPERTONIC_DIR / "onnx" / "text_encoder.onnx"
-    if marker.exists():
+    missing = [f for f in _REQUIRED_FILES if not (SUPERTONIC_DIR / f).exists()]
+    
+    if not missing:
         return str(SUPERTONIC_DIR)
+    
+    print(f"[Supertonic] Missing files: {missing}")
     print(f"[Supertonic] Downloading {MODEL_ID} → {SUPERTONIC_DIR}")
     print("[Supertonic] (one-time ~200 MB download)")
+    
     from huggingface_hub import snapshot_download
-
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
         snapshot_download(repo_id=MODEL_ID, local_dir=str(SUPERTONIC_DIR))
+    
+    # verify all files are now present
+    still_missing = [f for f in _REQUIRED_FILES if not (SUPERTONIC_DIR / f).exists()]
+    if still_missing:
+        raise RuntimeError(f"[Supertonic] Download incomplete, still missing: {still_missing}")
+    
     print("[Supertonic] Download complete.")
     return str(SUPERTONIC_DIR)
 
@@ -6058,6 +5970,20 @@ def release_camera():
 
 ```
 
+### vision/download/__init__.py
+
+```python
+from vision.download.vlm import ensure_downloaded
+
+```
+
+### vision/download/vlm.py
+
+```python
+from vision.model.load import _ensure_downloaded as ensure_downloaded
+
+```
+
 ### vision/inference/query.py
 
 ```python
@@ -6159,11 +6085,55 @@ def snap_b64() -> str:
 ### vision/model/load.py
 
 ```python
-from config.vlm import VLM_BACKEND
 import subprocess
 import sys
+from pathlib import Path
+from config.vlm import VLM_BACKEND
 
 
+def _ensure_downloaded() -> None:
+    from config.vlm import VLM_MODEL_PATH, VLM_MMPROJ_PATH
+    import warnings
+
+    model_path = Path(VLM_MODEL_PATH)
+    mmproj_path = Path(VLM_MMPROJ_PATH)
+
+    if model_path.exists() and mmproj_path.exists():
+        return
+
+    print("[VLM] Model files not found — downloading from HuggingFace...")
+    model_path.parent.mkdir(parents=True, exist_ok=True)
+
+    try:
+        from huggingface_hub import hf_hub_download
+    except ImportError:
+        raise RuntimeError("huggingface_hub not installed. Run: pip install huggingface_hub")
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+
+        if not model_path.exists():
+            print(f"[VLM] Downloading {model_path.name} (~1.5 GB)...")
+            hf_hub_download(
+                repo_id="Qwen/Qwen3-VL-2B-Instruct-GGUF",
+                filename="Qwen3VL-2B-Instruct-Q4_K_M.gguf",
+                local_dir=str(model_path.parent),
+            )
+            print(f"[VLM] Downloaded {model_path.name}")
+
+        if not mmproj_path.exists():
+            print(f"[VLM] Downloading {mmproj_path.name} (~445 MB)...")
+            hf_hub_download(
+                repo_id="ggml-org/Qwen3-VL-2B-Instruct-GGUF",
+                filename="mmproj-Qwen3-VL-2B-Instruct-Q8_0.gguf",
+                local_dir=str(mmproj_path.parent),
+            )
+            print(f"[VLM] Downloaded {mmproj_path.name}")
+
+    print("[VLM] All model files ready.")
+
+
+    
 def load_vlm():
     if VLM_BACKEND == "package":
         return _load_package()
@@ -6178,6 +6148,7 @@ def _load_package():
     from llama_cpp.llama_chat_format import Qwen3VLChatHandler
     from config.vlm import VLM_MODEL_PATH, VLM_MMPROJ_PATH
 
+    _ensure_downloaded()
     print("[VLM] Loading Qwen3-VL via package...")
     chat_handler = Qwen3VLChatHandler(clip_model_path=VLM_MMPROJ_PATH)
     llm = Llama(
@@ -6194,13 +6165,14 @@ def _load_package():
 
 
 def _load_server():
-    import subprocess
     import time
     import requests
     from config.vlm import (
         VLM_MODEL_PATH, VLM_MMPROJ_PATH,
         VLM_SERVER_PORT, VLM_SERVER_BINARY
     )
+
+    _ensure_downloaded()
 
     print("[VLM] Starting llama-server subprocess...")
     proc = subprocess.Popen(
@@ -6220,7 +6192,6 @@ def _load_server():
     print("[VLM] Waiting for server to be ready (may take 2-3 min on first run)...")
     i = 0
     while True:
-        # check if process died
         if proc.poll() is not None:
             raise RuntimeError(f"[VLM] Server process died with code {proc.poll()}")
         try:

@@ -26,6 +26,8 @@ def main():
         _run_vision_text()
     elif MODE == "vision_speech":
         _run_vision_speech()
+    elif MODE == "voice_screen":
+        _run_voice_screen()
     else:
         print(f"  Unknown MODE '{MODE}'. Check config/features.py")
 
@@ -510,6 +512,119 @@ def _run_vision_speech():
         vlm_shutdown()
         tts_shutdown(engine)
 
+def _run_voice_screen():
+    import threading
+    from config.tts import SUPERTONIC_VOICE, SUPERTONIC_SPEED, SUPERTONIC_STEPS, SUPERTONIC_LANGUAGE
+    from config.vad import RECORD_SAMPLE_RATE
+    from config.vlm import VLM_BACKEND, VLM_SYSTEM_PROMPT, VLM_MAX_TOKENS, VLM_TEMPERATURE, VLM_TOP_P, VLM_TOP_K, VLM_PRESENCE_PENALTY, VLM_SERVER_PORT
+    from vision.model.singleton import get_model as get_vlm, shutdown as vlm_shutdown
+    from transcription.model.singleton import get_model as load_whisper
+    from transcription.stream import create_stream, start_stream, end_of_speech
+    from transcription.vad.state import create_vad_state, reset_vad_state
+    from transcription.vad.session import run_mic_session
+    from tts.engine.state import create_engine
+    from tts.engine.worker import start_worker
+    from tts.engine.feed import feed_token, flush as tts_flush
+    from tts.engine.control import interrupt, resume, speak_filler, record_llm_latency
+    from tts.engine.status import is_speaking, shutdown as tts_shutdown
+    from tts.model.singleton import get_model as get_tts_model
+    from ui.console import show_partial, show_speaking, show_you, start_ai_line
+    from jobhunter.os_snap import snap_screen_b64  # screen instead of camera
+    import requests, json
+
+    def query_screen_stream(prompt: str):
+        """Query VLM with current screen screenshot."""
+        img = snap_screen_b64()
+        messages = [
+            {"role": "system", "content": VLM_SYSTEM_PROMPT},
+            {"role": "user", "content": [
+                {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{img}"}},
+                {"type": "text", "text": prompt},
+            ]},
+        ]
+        params = dict(max_tokens=VLM_MAX_TOKENS, temperature=VLM_TEMPERATURE,
+                      top_p=VLM_TOP_P, presence_penalty=VLM_PRESENCE_PENALTY, stream=True)
+        response = requests.post(
+            f"http://localhost:{VLM_SERVER_PORT}/v1/chat/completions",
+            json={"messages": messages, **params}, stream=True, timeout=30,
+        )
+        for line in response.iter_lines():
+            if line and line != b"data: [DONE]":
+                try:
+                    chunk = json.loads(line.decode().replace("data: ", ""))
+                    token = chunk["choices"][0]["delta"].get("content", "")
+                    if token:
+                        yield token
+                except:
+                    pass
+
+    print(f"  Loading Whisper + VLM (screen mode) + TTS...")
+    load_whisper()
+    get_vlm()
+    print("  Ready — ask me anything about your screen.\n")
+
+    logger = create_logger()
+    lock = threading.Lock()
+    vad_state = create_vad_state(sample_rate=RECORD_SAMPLE_RATE)
+
+    def on_partial(t): show_partial(t)
+
+    transcriber = create_stream(on_partial=on_partial, on_final=lambda t: None)
+    start_stream(transcriber)
+
+    engine = create_engine(voice=SUPERTONIC_VOICE, speed=SUPERTONIC_SPEED,
+                           steps=SUPERTONIC_STEPS, language=SUPERTONIC_LANGUAGE)
+    start_worker(engine)
+    get_tts_model()
+
+    def on_speech_start():
+        interrupt(engine)
+        show_speaking()
+
+    def on_speech_end():
+        if not lock.acquire(blocking=False):
+            return
+        reset_vad_state(vad_state)
+
+        def _run():
+            try:
+                e2e_start = time.time()
+                text = end_of_speech(transcriber)
+                whisper_latency = time.time() - e2e_start
+                if not text:
+                    return
+                show_you(text)
+                resume(engine)
+                speak_filler(engine)
+                start_ai_line()
+                llm_start = time.time()
+                ai_response = ""
+                first_token_time = None
+                for token in query_screen_stream(text):
+                    if first_token_time is None:
+                        first_token_time = time.time() - llm_start
+                    print(token, end="", flush=True)
+                    ai_response += token
+                    feed_token(engine, token)
+                tts_flush(engine)
+                print()
+                if first_token_time:
+                    record_llm_latency(engine, first_token_time * 1000)
+                log_request(logger, text, ai_response, whisper_latency,
+                            first_token_time or 0, time.time() - llm_start,
+                            time.time() - e2e_start)
+            finally:
+                lock.release()
+
+        threading.Thread(target=_run, daemon=True).start()
+
+    try:
+        run_mic_session(transcriber=transcriber, vad_state=vad_state,
+                        on_speech_start=on_speech_start, on_speech_end=on_speech_end,
+                        should_process_chunk=lambda: not is_speaking(engine))
+    finally:
+        vlm_shutdown()
+        tts_shutdown(engine)
 
 if __name__ == "__main__":
     main()
