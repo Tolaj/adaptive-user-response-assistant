@@ -31,7 +31,7 @@ def _scale_coords(vx: int, vy: int) -> tuple[int, int]:
     sw, sh = get_screen_size()
     vx = max(0, min(vx, 640))
     vy = max(0, min(vy, 400))
-    x = int(vx * sw / 640)
+    x = int((640 - vx) * sw / 640)  # mirror x back
     y = int(vy * sh / 400)
     return x, y
 

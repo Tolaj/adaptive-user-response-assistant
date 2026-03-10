@@ -34,7 +34,7 @@ def snap_screen_b64() -> str:
             capture_output=True,
         )
         img = Image.open(tmp_path).convert("RGB")
-
+        img = img.transpose(Image.FLIP_LEFT_RIGHT)  # ← add this
         # Resize to VLM-friendly resolution (keeps aspect ratio, pads if needed)
         img.thumbnail((SNAP_WIDTH, SNAP_HEIGHT), Image.LANCZOS)
 

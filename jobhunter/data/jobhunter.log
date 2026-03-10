@@ -657,3 +657,43 @@ Total in DB: 0
 [2026-03-09 13:04:40] [Agent] Tool: type_text({'text': 'junior python developer remote'})
 [2026-03-09 13:04:42] [Agent] Step 5 — taking screenshot
 [2026-03-09 13:04:48] [Agent] Tool: type_text({'text': 'junior python developer remote'})
+[2026-03-09 13:55:54] Profile loaded: Swapnil
+[2026-03-09 13:55:54] Looking for: Junior Software Developer, Junior Python Developer...
+[2026-03-09 13:55:54] Job hunter scheduler starting.
+[2026-03-09 13:55:54] Will run every 2 hour(s). Press Ctrl+C to stop.
+
+[2026-03-09 13:56:00] 
+==================================================
+[2026-03-09 13:56:00] HUNT CYCLE STARTING — Monday 09 Mar 2026, 13:56
+[2026-03-09 13:56:00] ==================================================
+[2026-03-09 13:56:00] [LINKEDIN] Navigating to https://www.linkedin.com/jobs
+[2026-03-09 13:56:01] [OS] Navigating to: https://www.linkedin.com/jobs
+[2026-03-09 13:56:09] [OS] Navigation complete.
+[2026-03-09 13:56:28] [VLM→Action] click — 
+[2026-03-09 13:56:30] [OS] Clicked (225,585) → screen (516,956)
+[2026-03-09 13:56:47] [VLM→Action] click — 
+[2026-03-09 13:56:49] [OS] Clicked (238,588) → screen (546,956)
+[2026-03-09 13:57:06] [VLM→Action] click — 
+[2026-03-09 13:57:07] [OS] Clicked (238,588) → screen (546,956)
+[2026-03-09 13:57:25] [VLM→Action] click — 
+[2026-03-09 13:57:27] [OS] Clicked (225,588) → screen (516,956)
+[2026-03-09 13:57:45] [VLM→Action] click — 
+[2026-03-09 13:57:47] [OS] Clicked (235,588) → screen (539,956)
+[2026-03-09 13:58:04] [VLM→Action] click — 
+[2026-03-09 13:58:06] [OS] Clicked (240,588) → screen (551,956)
+[2026-03-09 14:09:35] Profile loaded: Swapnil
+[2026-03-09 14:09:35] Looking for: Junior Software Developer, Junior Python Developer...
+[2026-03-09 14:09:35] Job hunter scheduler starting.
+[2026-03-09 14:09:35] Will run every 2 hour(s). Press Ctrl+C to stop.
+
+[2026-03-09 14:09:40] 
+==================================================
+[2026-03-09 14:09:40] HUNT CYCLE STARTING — Monday 09 Mar 2026, 14:09
+[2026-03-09 14:09:40] ==================================================
+[2026-03-09 14:09:40] [LINKEDIN] Navigating to https://www.linkedin.com/jobs
+[2026-03-09 14:09:43] [OS] Navigating to: https://www.linkedin.com/jobs
+[2026-03-09 14:09:51] [OS] Navigation complete.
+[2026-03-09 14:10:09] [VLM→Action] click — 
+[2026-03-09 14:10:11] [OS] Clicked (640,400) → screen (0,956)
+[2026-03-09 14:10:30] [VLM→Action] click — 
+[2026-03-09 14:10:32] [OS Actions] Failed to execute click: PyAutoGUI fail-safe triggered from mouse moving to a corner of the screen. To disable this fail-safe, set pyautogui.FAILSAFE to False. DISABLING FAIL-SAFE IS NOT RECOMMENDED.

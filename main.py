@@ -68,14 +68,40 @@ def _run_stt_only():
     def on_speech_start():
         show_speaking()
 
+    _awake = [False]  # use list so inner function can modify it
+
+ 
     def on_speech_end():
         t_start = time.time()
         text = end_of_speech(transcriber)
         whisper_latency = time.time() - t_start
-        if text:
-            show_stt_final(text)
-            log_request(logger, text, "", whisper_latency, 0.0, 0.0, whisper_latency)
+        if not text:
+            reset_vad_state(vad_state)
+            return
+
+        from config.vad import WAKE_WORD, WAKE_WORD_ENABLED, SLEEP_WORD
+
+        # Sleep word — go back to waiting for wake word
+        if _awake[0] and SLEEP_WORD.lower() in text.lower():
+            _awake[0] = False
+            show_stt_final(f"[Sleeping — say '{WAKE_WORD}' to wake me]")
+            reset_vad_state(vad_state)
+            return
+
+        # Wake word
+        if WAKE_WORD_ENABLED and not _awake[0]:
+            if WAKE_WORD.lower() in text.lower():
+                _awake[0] = True
+                show_stt_final(f"[Awake — listening]")
+            reset_vad_state(vad_state)
+            return
+
+        show_stt_final(text)
+        log_request(logger, text, "", whisper_latency, 0.0, 0.0, whisper_latency)
+        _awake[0] = False  # go back to sleep after each sentence
+        show_stt_final(f"[Sleeping — say '{WAKE_WORD}' to wake me]")
         reset_vad_state(vad_state)
+
 
     run_mic_session(
         transcriber=transcriber,
@@ -309,6 +335,16 @@ def _run_full():
                 whisper_latency = time.time() - whisper_start
                 if not text:
                     return
+
+                from config.vad import WAKE_WORD, WAKE_WORD_ENABLED
+                if WAKE_WORD_ENABLED:
+                    if not hasattr(_run, "_awake"):
+                        _run._awake = False
+                    if not _run._awake:
+                        if WAKE_WORD.lower() in text.lower():
+                            _run._awake = True
+                            show_you(f"[Wake word detected: {text}]")
+                        return 
                 show_you(text)
                 resume(engine)
                 speak_filler(engine)
@@ -466,6 +502,16 @@ def _run_vision_speech():
                 whisper_latency = time.time() - whisper_start
                 if not text:
                     return
+
+                from config.vad import WAKE_WORD, WAKE_WORD_ENABLED
+                if WAKE_WORD_ENABLED:
+                    if not hasattr(_run, "_awake"):
+                        _run._awake = False
+                    if not _run._awake:
+                        if WAKE_WORD.lower() in text.lower():
+                            _run._awake = True
+                            show_you(f"[Wake word detected: {text}]")
+                        return  # ignore everything until wake word heard
                 show_you(text)
                 resume(engine)
                 speak_filler(engine)
@@ -593,6 +639,16 @@ def _run_voice_screen():
                 whisper_latency = time.time() - e2e_start
                 if not text:
                     return
+
+                from config.vad import WAKE_WORD, WAKE_WORD_ENABLED
+                if WAKE_WORD_ENABLED:
+                    if not hasattr(_run, "_awake"):
+                        _run._awake = False
+                    if not _run._awake:
+                        if WAKE_WORD.lower() in text.lower():
+                            _run._awake = True
+                            show_you(f"[Wake word detected: {text}]")
+                        return  # ignore everything until wake word heard
                 show_you(text)
                 resume(engine)
                 speak_filler(engine)

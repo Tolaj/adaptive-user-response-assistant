@@ -30,3 +30,7 @@ SILERO_THRESHOLD = 0.45  # was 0.5 — only triggers on high-confidence speech
 
 DENOISE_ENABLED = False
 PUSH_TO_TALK = False
+
+WAKE_WORD = "follow"
+WAKE_WORD_ENABLED = True
+SLEEP_WORD = "sleep"
