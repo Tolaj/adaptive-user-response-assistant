@@ -28,6 +28,8 @@ def main():
         _run_vision_speech()
     elif MODE == "voice_screen":
         _run_voice_screen()
+    elif MODE == "agent":
+        _run_agent()
     else:
         print(f"  Unknown MODE '{MODE}'. Check config/features.py")
 
@@ -70,7 +72,6 @@ def _run_stt_only():
 
     _awake = [False]  # use list so inner function can modify it
 
- 
     def on_speech_end():
         t_start = time.time()
         text = end_of_speech(transcriber)
@@ -101,7 +102,6 @@ def _run_stt_only():
         _awake[0] = False  # go back to sleep after each sentence
         show_stt_final(f"[Sleeping — say '{WAKE_WORD}' to wake me]")
         reset_vad_state(vad_state)
-
 
     run_mic_session(
         transcriber=transcriber,
@@ -316,6 +316,7 @@ def _run_full():
     )
     start_worker(engine)
     from tts.model.singleton import get_model as get_tts_model
+
     get_tts_model()
 
     def on_speech_start():
@@ -337,6 +338,7 @@ def _run_full():
                     return
 
                 from config.vad import WAKE_WORD, WAKE_WORD_ENABLED
+
                 if WAKE_WORD_ENABLED:
                     if not hasattr(_run, "_awake"):
                         _run._awake = False
@@ -344,7 +346,7 @@ def _run_full():
                         if WAKE_WORD.lower() in text.lower():
                             _run._awake = True
                             show_you(f"[Wake word detected: {text}]")
-                        return 
+                        return
                 show_you(text)
                 resume(engine)
                 speak_filler(engine)
@@ -389,7 +391,6 @@ def _run_full():
     shutdown(engine)
 
 
-
 def _run_vision_text():
     from vision.model.singleton import get_model, shutdown
     from vision.inference.query import query_stream
@@ -431,7 +432,6 @@ def _run_vision_text():
     finally:
         release_camera()
         shutdown()
-
 
 
 def _run_vision_speech():
@@ -504,6 +504,7 @@ def _run_vision_speech():
                     return
 
                 from config.vad import WAKE_WORD, WAKE_WORD_ENABLED
+
                 if WAKE_WORD_ENABLED:
                     if not hasattr(_run, "_awake"):
                         _run._awake = False
@@ -558,11 +559,26 @@ def _run_vision_speech():
         vlm_shutdown()
         tts_shutdown(engine)
 
+
 def _run_voice_screen():
     import threading
-    from config.tts import SUPERTONIC_VOICE, SUPERTONIC_SPEED, SUPERTONIC_STEPS, SUPERTONIC_LANGUAGE
+    from config.tts import (
+        SUPERTONIC_VOICE,
+        SUPERTONIC_SPEED,
+        SUPERTONIC_STEPS,
+        SUPERTONIC_LANGUAGE,
+    )
     from config.vad import RECORD_SAMPLE_RATE
-    from config.vlm import VLM_BACKEND, VLM_SYSTEM_PROMPT, VLM_MAX_TOKENS, VLM_TEMPERATURE, VLM_TOP_P, VLM_TOP_K, VLM_PRESENCE_PENALTY, VLM_SERVER_PORT
+    from config.vlm import (
+        VLM_BACKEND,
+        VLM_SYSTEM_PROMPT,
+        VLM_MAX_TOKENS,
+        VLM_TEMPERATURE,
+        VLM_TOP_P,
+        VLM_TOP_K,
+        VLM_PRESENCE_PENALTY,
+        VLM_SERVER_PORT,
+    )
     from vision.model.singleton import get_model as get_vlm, shutdown as vlm_shutdown
     from transcription.model.singleton import get_model as load_whisper
     from transcription.stream import create_stream, start_stream, end_of_speech
@@ -575,7 +591,7 @@ def _run_voice_screen():
     from tts.engine.status import is_speaking, shutdown as tts_shutdown
     from tts.model.singleton import get_model as get_tts_model
     from ui.console import show_partial, show_speaking, show_you, start_ai_line
-    from jobhunter.os_snap import snap_screen_b64  # screen instead of camera
+    from agent.snap import snap_screen_b64  # screen instead of camera
     import requests, json
 
     def query_screen_stream(prompt: str):
@@ -583,16 +599,29 @@ def _run_voice_screen():
         img = snap_screen_b64()
         messages = [
             {"role": "system", "content": VLM_SYSTEM_PROMPT},
-            {"role": "user", "content": [
-                {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{img}"}},
-                {"type": "text", "text": prompt},
-            ]},
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "image_url",
+                        "image_url": {"url": f"data:image/jpeg;base64,{img}"},
+                    },
+                    {"type": "text", "text": prompt},
+                ],
+            },
         ]
-        params = dict(max_tokens=VLM_MAX_TOKENS, temperature=VLM_TEMPERATURE,
-                      top_p=VLM_TOP_P, presence_penalty=VLM_PRESENCE_PENALTY, stream=True)
+        params = dict(
+            max_tokens=VLM_MAX_TOKENS,
+            temperature=VLM_TEMPERATURE,
+            top_p=VLM_TOP_P,
+            presence_penalty=VLM_PRESENCE_PENALTY,
+            stream=True,
+        )
         response = requests.post(
             f"http://localhost:{VLM_SERVER_PORT}/v1/chat/completions",
-            json={"messages": messages, **params}, stream=True, timeout=30,
+            json={"messages": messages, **params},
+            stream=True,
+            timeout=30,
         )
         for line in response.iter_lines():
             if line and line != b"data: [DONE]":
@@ -613,13 +642,18 @@ def _run_voice_screen():
     lock = threading.Lock()
     vad_state = create_vad_state(sample_rate=RECORD_SAMPLE_RATE)
 
-    def on_partial(t): show_partial(t)
+    def on_partial(t):
+        show_partial(t)
 
     transcriber = create_stream(on_partial=on_partial, on_final=lambda t: None)
     start_stream(transcriber)
 
-    engine = create_engine(voice=SUPERTONIC_VOICE, speed=SUPERTONIC_SPEED,
-                           steps=SUPERTONIC_STEPS, language=SUPERTONIC_LANGUAGE)
+    engine = create_engine(
+        voice=SUPERTONIC_VOICE,
+        speed=SUPERTONIC_SPEED,
+        steps=SUPERTONIC_STEPS,
+        language=SUPERTONIC_LANGUAGE,
+    )
     start_worker(engine)
     get_tts_model()
 
@@ -641,6 +675,7 @@ def _run_voice_screen():
                     return
 
                 from config.vad import WAKE_WORD, WAKE_WORD_ENABLED
+
                 if WAKE_WORD_ENABLED:
                     if not hasattr(_run, "_awake"):
                         _run._awake = False
@@ -666,21 +701,86 @@ def _run_voice_screen():
                 print()
                 if first_token_time:
                     record_llm_latency(engine, first_token_time * 1000)
-                log_request(logger, text, ai_response, whisper_latency,
-                            first_token_time or 0, time.time() - llm_start,
-                            time.time() - e2e_start)
+                log_request(
+                    logger,
+                    text,
+                    ai_response,
+                    whisper_latency,
+                    first_token_time or 0,
+                    time.time() - llm_start,
+                    time.time() - e2e_start,
+                )
             finally:
                 lock.release()
 
         threading.Thread(target=_run, daemon=True).start()
 
     try:
-        run_mic_session(transcriber=transcriber, vad_state=vad_state,
-                        on_speech_start=on_speech_start, on_speech_end=on_speech_end,
-                        should_process_chunk=lambda: not is_speaking(engine))
+        run_mic_session(
+            transcriber=transcriber,
+            vad_state=vad_state,
+            on_speech_start=on_speech_start,
+            on_speech_end=on_speech_end,
+            should_process_chunk=lambda: not is_speaking(engine),
+        )
     finally:
         vlm_shutdown()
         tts_shutdown(engine)
+
+
+def _run_agent():
+    import subprocess, time, requests
+    from config.vlm import VLM_SERVER_BINARY, VLM_MODEL_PATH, VLM_MMPROJ_PATH
+    from agent.config import VLM_SERVER_PORT
+
+    # ── Start VLM server if not already running ──────────────────────────
+    url = f"http://localhost:{VLM_SERVER_PORT}/health"
+    try:
+        if requests.get(url, timeout=2).status_code == 200:
+            print(f"[VLM] Server already running ✓")
+    except Exception:
+        print(f"[VLM] Starting llama-server...")
+        proc = subprocess.Popen(
+            [
+                VLM_SERVER_BINARY,
+                "-m",
+                VLM_MODEL_PATH,
+                "--mmproj",
+                VLM_MMPROJ_PATH,
+                "-ngl",
+                "99",
+                "-c",
+                "32768",
+                "--port",
+                str(VLM_SERVER_PORT),
+            ],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+        print("[VLM] Waiting for server to be ready...")
+        for i in range(120):
+            if proc.poll() is not None:
+                raise RuntimeError("[VLM] Server process died on startup")
+            try:
+                if requests.get(url, timeout=1).status_code == 200:
+                    print(f"[VLM] Server ready after {i}s ✓")
+                    break
+            except Exception:
+                pass
+            time.sleep(1)
+
+    # ── Run the agent ─────────────────────────────────────────────────────
+    from agent.run import run
+
+    print("\nWhat should the agent do?")
+    goal = input("Goal: ").strip()
+
+    if not goal:
+        print("No goal provided, exiting.")
+        return
+
+    run(goal)
+
 
 if __name__ == "__main__":
     main()

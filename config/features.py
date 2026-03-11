@@ -8,7 +8,7 @@
 #   "voice_to_text_chat"    → Mic → Whisper → LLM → print response (no TTS)
 #   "full"                  → Mic → Whisper → LLM → TTS (everything)
 
-MODE = "stt_only"
+MODE = "agent"
 
 # ── Derived flags (do not edit) ───────────────────────────────
 ENABLE_STT = MODE in ("stt_only", "voice_to_text_chat", "full")
@@ -16,4 +16,6 @@ ENABLE_TTS = MODE in ("tts_only", "full")
 ENABLE_LLM = MODE in ("text_to_text_chat", "voice_to_text_chat", "full", "tts_only")
 ENABLE_SERVER = MODE == "server"
 ENABLE_VISION = MODE in ("vision_text", "vision_speech", "voice_screen")
+ENABLE_AGENT = MODE == "agent"
+
 SHOW_TEXT = True

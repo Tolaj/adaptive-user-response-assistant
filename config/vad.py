@@ -32,5 +32,5 @@ DENOISE_ENABLED = False
 PUSH_TO_TALK = False
 
 WAKE_WORD = "follow"
-WAKE_WORD_ENABLED = True
+WAKE_WORD_ENABLED = False
 SLEEP_WORD = "sleep"
