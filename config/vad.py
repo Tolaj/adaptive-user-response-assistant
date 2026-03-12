@@ -29,7 +29,7 @@ COMPRESSION_RATIO_THRESHOLD = (
 SILERO_THRESHOLD = 0.45  # was 0.5 — only triggers on high-confidence speech
 
 DENOISE_ENABLED = False
-PUSH_TO_TALK = False
+PUSH_TO_TALK = True
 
 WAKE_WORD = "follow"
 WAKE_WORD_ENABLED = False
