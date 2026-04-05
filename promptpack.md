@@ -1,7 +1,7 @@
 # PromptPack Output
 
 **Root:** `/Users/swapnil/Documents/Projects/adaptive-user-response-assistant`
-**Generated:** 2026-03-09T18:11:59.724Z
+**Generated:** 2026-03-24T03:48:52.620Z
 
 ---
 
@@ -9,6 +9,14 @@
 
 ```txt
 .
+├─ agent/
+│  ├─ __init__.py
+│  ├─ data/
+│  ├─ loop.py
+│  ├─ prompt.py
+│  └─ tools/
+│     ├─ __init__.py
+│     └─ omniparser.py
 ├─ audio/
 │  ├─ __init__.py
 │  ├─ gate/
@@ -27,10 +35,10 @@
 │     ├─ mono.py
 │     ├─ normalise.py
 │     └─ resample.py
-├─ audio_000.wav
 ├─ backup/
 ├─ config/
 │  ├─ __init__.py
+│  ├─ agent.py
 │  ├─ features.py
 │  ├─ llm.py
 │  ├─ paths.py
@@ -40,24 +48,6 @@
 │  ├─ vad.py
 │  ├─ vlm.py
 │  └─ whisper.py
-├─ jobhunter/
-│  ├─ __init_.py
-│  ├─ actions.py
-│  ├─ agent.py
-│  ├─ browser.py
-│  ├─ config.py
-│  ├─ data/
-│  │  └─ jobs.db
-│  ├─ lg_agent.py
-│  ├─ logger.py
-│  ├─ os_actions.py
-│  ├─ os_browser.py
-│  ├─ os_snap.py
-│  ├─ profile.py
-│  ├─ scheduler.py
-│  ├─ snap.py
-│  ├─ storage.py
-│  └─ vlm_query.py
 ├─ llm/
 │  ├─ __init__.py
 │  ├─ download/
@@ -85,11 +75,9 @@
 │  │  ├─ build.py
 │  │  └─ system.py
 │  └─ tools/
-├─ logs/
-├─ main_jobhunter.py
+├─ main_agent.py
 ├─ main.py
 ├─ requirements.txt
-├─ sentence_04.wav
 ├─ server/
 │  ├─ __init__.py
 │  ├─ app.py
@@ -121,8 +109,6 @@
 │        ├─ __init__.py
 │        ├─ create.py
 │        └─ teardown.py
-├─ test_audio_000.wav
-├─ test_os_browser.py
 ├─ transcription/
 │  ├─ __init__.py
 │  ├─ download/
@@ -220,10 +206,576 @@
 ## 2) File Contents
 
 
-### audio_000.wav
+### agent/__init__.py
 
-(Skipped: binary or unreadable file)
+```python
+# agent/__init__.py
+from agent.loop import ScreenAgent
 
+```
+
+### agent/loop.py
+
+```python
+# agent/loop.py
+# ─────────────────────────────────────────────────────────────────────────────
+# Core screen agent loop.
+#
+# Perception:  os_snap.snap_screen_pil()  → PIL image
+#              OmniParser.parse()          → annotated PIL + element list
+# Reasoning:   Your local VLM server      → JSON action
+# Execution:   jobhunter/os_browser.py    → mouse + keyboard
+#
+# Usage:
+#   from agent.loop import ScreenAgent
+#   agent = ScreenAgent()
+#   agent.run("Message Harshith i'll be late")
+# ─────────────────────────────────────────────────────────────────────────────
+
+from __future__ import annotations
+
+import base64
+import json
+import re
+import time
+from io import BytesIO
+from typing import Optional
+
+import requests
+from PIL import Image
+
+from config.vlm import VLM_SERVER_PORT
+from config.agent import (
+    AGENT_MAX_STEPS,
+    AGENT_STEP_DELAY,
+    AGENT_MAX_TOKENS,
+    AGENT_TEMPERATURE,
+)
+from agent.prompt import AGENT_SYSTEM_PROMPT
+from agent.tools.omniparser import parse as omniparse, elements_to_text
+from jobhunter.os_snap import snap_screen_pil
+from jobhunter.os_browser import (
+    click,
+    double_click,
+    type_text,
+    press_enter,
+    press_escape,
+    scroll,
+    bring_chrome_to_front,
+)
+from jobhunter.logger import log
+import pyautogui
+
+
+# ── Helpers ────────────────────────────────────────────────────────────────
+def _pil_to_b64(img: Image.Image, quality: int = 70) -> str:
+    buf = BytesIO()
+    img.convert("RGB").save(buf, format="JPEG", quality=quality)
+    return base64.b64encode(buf.getvalue()).decode()
+
+
+def _parse_json(raw: str) -> dict:
+    raw = raw.strip()
+    raw = re.sub(r"^```(?:json)?\s*", "", raw)
+    raw = re.sub(r"\s*```$", "", raw)
+    try:
+        return json.loads(raw)
+    except Exception:
+        match = re.search(r"\{.*\}", raw, re.DOTALL)
+        if match:
+            try:
+                return json.loads(match.group())
+            except Exception:
+                pass
+    return {}
+
+
+# ── VLM call (reuses your llama-server exactly like os_actions.py) ─────────
+def _ask_vlm(
+    annotated_img: Image.Image,
+    element_text: str,
+    goal: str,
+    history: list[str],
+) -> dict:
+    history_text = "\n".join(history[-8:]) if history else "None yet."
+
+    user_content = [
+        {
+            "type": "image_url",
+            "image_url": {
+                "url": f"data:image/jpeg;base64,{_pil_to_b64(annotated_img)}"
+            },
+        },
+        {
+            "type": "text",
+            "text": (
+                f"GOAL: {goal}\n\n"
+                f"ACTION HISTORY (most recent last):\n{history_text}\n\n"
+                f"{element_text}\n\n"
+                "Output your next action as JSON:"
+            ),
+        },
+    ]
+
+    try:
+        response = requests.post(
+            f"http://localhost:{VLM_SERVER_PORT}/v1/chat/completions",
+            json={
+                "messages": [
+                    {"role": "system", "content": AGENT_SYSTEM_PROMPT},
+                    {"role": "user", "content": user_content},
+                ],
+                "max_tokens": AGENT_MAX_TOKENS,
+                "temperature": AGENT_TEMPERATURE,
+                "stream": False,
+            },
+            timeout=30,
+        )
+        raw = response.json()["choices"][0]["message"]["content"].strip()
+        action = _parse_json(raw)
+        log(f"[Agent] VLM → {action.get('action','?')}  {action}")
+        return action
+    except Exception as e:
+        log(f"[Agent] VLM call failed: {e}")
+        return {}
+
+
+# ── Action executor ────────────────────────────────────────────────────────
+def _execute(action: dict) -> bool:
+    """Execute one action. Returns True if agent should stop (done/error)."""
+    t = action.get("action", "unknown")
+
+    try:
+        if t == "click":
+            click(int(action["x"]), int(action["y"]))
+
+        elif t == "double_click":
+            double_click(int(action["x"]), int(action["y"]))
+
+        elif t == "right_click":
+            pyautogui.rightClick(int(action["x"]), int(action["y"]))
+
+        elif t == "type":
+            type_text(str(action["text"]))
+
+        elif t == "key":
+            keys = action.get("keys", [])
+            if isinstance(keys, str):
+                keys = keys.replace("+", " ").split()
+            pyautogui.hotkey(*keys)
+            time.sleep(0.3)
+
+        elif t == "scroll":
+            direction = action.get("direction", "down")
+            amount = int(action.get("amount", 3))
+            scroll(direction, amount=amount)
+
+        elif t == "wait":
+            time.sleep(float(action.get("seconds", 1.0)))
+
+        elif t == "done":
+            log(f"[Agent] Done — {action.get('reason', '')}")
+            return True
+
+        else:
+            log(f"[Agent] Unknown action '{t}' — skipping.")
+
+    except Exception as e:
+        log(f"[Agent] Execute error ({t}): {e}")
+
+    return False
+
+
+# ── Main agent ─────────────────────────────────────────────────────────────
+class ScreenAgent:
+    """
+    Pure-vision screen agent.
+
+    Perception:  screencapture + OmniParser
+    Reasoning:   your local Qwen3-VL via llama-server
+    Execution:   pyautogui (mouse + keyboard)
+    No OS APIs, no MCP, no Playwright.
+    """
+
+    def __init__(self):
+        log("[Agent] Initialising OmniParser...")
+        # Warm up OmniParser (loads YOLO + caption model once)
+        from agent.tools.omniparser import _get_parser
+
+        _get_parser()
+        log("[Agent] Ready.")
+
+    def _perceive(self) -> tuple[Image.Image, list[dict]]:
+        """Take screenshot → OmniParser → (annotated_img, elements)."""
+        img = snap_screen_pil()
+        annotated, elements = omniparse(img)
+        log(f"[Agent] Perceived {len(elements)} elements on screen.")
+        return annotated, elements
+
+    def run(self, goal: str, focus_app: Optional[str] = None) -> None:
+        """
+        Run the agent until the goal is done or max steps reached.
+
+        Parameters
+        ----------
+        goal        : Natural language task description
+        focus_app   : Optional — bring this macOS app to front before starting
+                      e.g. "Messages", "Finder", "Google Chrome"
+        """
+        log(f"\n[Agent] ═══════════════════════════════════")
+        log(f"[Agent] Goal: {goal}")
+        log(f"[Agent] ═══════════════════════════════════")
+
+        if focus_app:
+            import subprocess
+
+            subprocess.run(
+                ["osascript", "-e", f'tell application "{focus_app}" to activate'],
+                capture_output=True,
+            )
+            time.sleep(0.8)
+
+        history: list[str] = []
+
+        for step in range(1, AGENT_MAX_STEPS + 1):
+            log(f"\n[Agent] ── Step {step}/{AGENT_MAX_STEPS} ──")
+
+            # 1. Perceive
+            annotated, elements = self._perceive()
+            element_text = elements_to_text(elements)
+
+            # 2. Reason
+            action = _ask_vlm(annotated, element_text, goal, history)
+            if not action:
+                log("[Agent] Empty action from VLM — retrying in 2s...")
+                time.sleep(2)
+                continue
+
+            history.append(f"Step {step}: {json.dumps(action)}")
+
+            # 3. Act
+            done = _execute(action)
+            if done:
+                break
+
+            time.sleep(AGENT_STEP_DELAY)
+
+        else:
+            log(f"[Agent] Reached max steps ({AGENT_MAX_STEPS}).")
+
+        log("[Agent] Run complete.")
+
+```
+
+### agent/prompt.py
+
+```python
+# agent/prompt.py
+# ─────────────────────────────────────────────────────────────────────────────
+# System prompts for the screen agent VLM calls.
+# Mirrors the _NAV_SYSTEM / _EXTRACT_SYSTEM pattern in jobhunter/os_actions.py.
+# ─────────────────────────────────────────────────────────────────────────────
+
+AGENT_SYSTEM_PROMPT = """You are a screen automation agent controlling a real macOS computer.
+You see:
+  1. An annotated screenshot with numbered bounding boxes drawn around every interactive element
+  2. A text list of those elements with their center coordinates
+  3. Your goal and action history
+
+Your job: output ONE action as a JSON object. Nothing else — no explanation, no markdown.
+
+Available actions:
+  {"action": "click",        "x": <int>, "y": <int>}
+  {"action": "double_click", "x": <int>, "y": <int>}
+  {"action": "right_click",  "x": <int>, "y": <int>}
+  {"action": "type",         "text": "<string>"}
+  {"action": "key",          "keys": ["cmd", "space"]}
+  {"action": "scroll",       "x": <int>, "y": <int>, "direction": "up"|"down", "amount": <int>}
+  {"action": "wait",         "seconds": <float>}
+  {"action": "done",         "reason": "<why task is complete>"}
+
+Rules:
+- ALWAYS prefer clicking by element coordinates from the numbered list — they are precise.
+- If an element you need is NOT in the list, estimate from the annotated screenshot.
+- After a click that opens a new window or menu, a new screenshot will be taken automatically.
+- Do not repeat the exact same action 3 times in a row — try a different approach.
+- For typing: click the input field first, then use the type action.
+- hotkeys: use the key action with a list e.g. ["cmd", "space"] for Spotlight.
+- Output ONLY the raw JSON. No text before or after it.
+"""
+
+```
+
+### agent/tools/__init__.py
+
+```python
+# agent/tools/__init__.py
+from agent.tools.omniparser import parse, elements_to_text
+
+```
+
+### agent/tools/omniparser.py
+
+```python
+# agent/tools/omniparser.py
+# ─────────────────────────────────────────────────────────────────────────────
+# OmniParser wrapper — sits between os_snap and the VLM.
+#
+# Input:  PIL image (from snap_screen_pil)
+# Output: annotated PIL image  +  structured element list
+#
+# Element list format (same shape as jobhunter/os_actions.py expectations):
+#   [{"id": 1, "label": "Finder icon", "x": 45, "y": 730, "w": 60, "h": 60}, ...]
+#
+# Setup (one-time):
+#   git clone https://github.com/microsoft/OmniParser
+#   cd OmniParser && python weights/download_weights.py
+#   pip install -e .
+#
+# Then set OMNIPARSER_WEIGHTS_DIR in config/agent.py to the weights/ folder.
+# ─────────────────────────────────────────────────────────────────────────────
+
+from __future__ import annotations
+
+import threading
+from pathlib import Path
+from PIL import Image, ImageDraw, ImageFont
+
+from config.agent import OMNIPARSER_WEIGHTS_DIR, OMNIPARSER_CAPTION_MODEL
+
+_model = None
+_processor = None
+_lock = threading.Lock()
+
+
+# ── Loader (singleton) ──────────────────────────────────────────────────────
+def _get_parser():
+    global _model, _processor
+    if _model is not None:
+        return _model, _processor
+
+    with _lock:
+        if _model is not None:
+            return _model, _processor
+
+        weights = Path(OMNIPARSER_WEIGHTS_DIR)
+        icon_model_path = str(weights / "icon_detect" / "model.pt")
+
+        print(f"[OmniParser] Loading YOLO detector from {icon_model_path} ...")
+
+        # Icon detection — YOLO-based, very fast (~30ms)
+        from ultralytics import YOLO
+
+        _model = YOLO(icon_model_path)
+        _model.overrides["verbose"] = False
+
+        # Caption model — BLIP2 or Florence-2
+        if OMNIPARSER_CAPTION_MODEL == "florence2":
+            from transformers import AutoProcessor, AutoModelForCausalLM
+            import torch
+
+            caption_path = str(weights / "icon_caption_florence")
+            print(f"[OmniParser] Loading Florence-2 from {caption_path} ...")
+            _processor = AutoProcessor.from_pretrained(
+                caption_path, trust_remote_code=True
+            )
+            _model._caption_model = AutoModelForCausalLM.from_pretrained(
+                caption_path,
+                torch_dtype=(
+                    torch.float16 if torch.cuda.is_available() else torch.float32
+                ),
+                trust_remote_code=True,
+            ).eval()
+        else:
+            # BLIP2 — lighter, good enough for icon labels
+            from transformers import Blip2Processor, Blip2ForConditionalGeneration
+            import torch
+
+            caption_path = str(weights / "icon_caption_blip2")
+            print(f"[OmniParser] Loading BLIP2 from {caption_path} ...")
+            _processor = Blip2Processor.from_pretrained(caption_path)
+            _model._caption_model = Blip2ForConditionalGeneration.from_pretrained(
+                caption_path,
+                torch_dtype=(
+                    torch.float16 if torch.cuda.is_available() else torch.float32
+                ),
+                device_map="auto",
+            ).eval()
+
+        print("[OmniParser] Ready.")
+    return _model, _processor
+
+
+# ── Caption helper ──────────────────────────────────────────────────────────
+def _caption_crop(crop: Image.Image) -> str:
+    """Run the caption model on a single cropped element."""
+    import torch
+
+    yolo, processor = _get_parser()
+    caption_model = yolo._caption_model
+
+    device = next(caption_model.parameters()).device
+
+    if OMNIPARSER_CAPTION_MODEL == "florence2":
+        inputs = processor(
+            images=crop,
+            text="<CAPTION>",
+            return_tensors="pt",
+        ).to(device)
+        with torch.no_grad():
+            ids = caption_model.generate(**inputs, max_new_tokens=20, num_beams=1)
+        raw = processor.batch_decode(ids, skip_special_tokens=True)[0]
+        return raw.replace("<CAPTION>", "").strip()
+    else:
+        inputs = processor(images=crop, return_tensors="pt").to(device)
+        with torch.no_grad():
+            ids = caption_model.generate(**inputs, max_new_tokens=20)
+        return processor.decode(ids[0], skip_special_tokens=True).strip()
+
+
+# ── Main parse function ─────────────────────────────────────────────────────
+def parse(
+    img: Image.Image,
+    conf_threshold: float = 0.05,
+    draw_labels: bool = True,
+) -> tuple[Image.Image, list[dict]]:
+    """
+    Detect + caption all interactive elements in a screenshot.
+
+    Parameters
+    ----------
+    img             : PIL Image (any size — we resize internally for detection)
+    conf_threshold  : YOLO confidence cutoff (lower = more elements detected)
+    draw_labels     : Whether to draw numbered boxes on the annotated image
+
+    Returns
+    -------
+    annotated       : PIL Image with coloured boxes + element IDs drawn
+    elements        : list of dicts, each:
+                        {
+                            "id":    int,       # 1-based
+                            "label": str,       # caption from BLIP2/Florence
+                            "x":     int,       # center x  (original image space)
+                            "y":     int,       # center y  (original image space)
+                            "w":     int,       # box width
+                            "h":     int,       # box height
+                            "conf":  float,     # YOLO confidence
+                        }
+    """
+    import torch
+
+    yolo, _ = _get_parser()
+
+    orig_w, orig_h = img.size
+
+    # YOLO works best at 640px
+    detect_img = img.resize((640, 640), Image.LANCZOS)
+    sx = orig_w / 640
+    sy = orig_h / 640
+
+    results = yolo(detect_img, conf=conf_threshold, verbose=False)[0]
+    boxes = results.boxes
+
+    elements = []
+    annotated = img.copy()
+    draw = ImageDraw.Draw(annotated)
+
+    # Try to load a small font — fallback to default if not available
+    try:
+        font = ImageFont.truetype("/System/Library/Fonts/Helvetica.ttc", 13)
+    except Exception:
+        font = ImageFont.load_default()
+
+    for i, box in enumerate(boxes):
+        x1, y1, x2, y2 = box.xyxy[0].tolist()
+        conf = float(box.conf[0])
+
+        # Scale back to original image coordinates
+        x1o = int(x1 * sx)
+        y1o = int(y1 * sy)
+        x2o = int(x2 * sx)
+        y2o = int(y2 * sy)
+        cx = (x1o + x2o) // 2
+        cy = (y1o + y2o) // 2
+        w = x2o - x1o
+        h = y2o - y1o
+
+        # Crop the element and caption it
+        margin = 4
+        crop = img.crop(
+            (
+                max(0, x1o - margin),
+                max(0, y1o - margin),
+                min(orig_w, x2o + margin),
+                min(orig_h, y2o + margin),
+            )
+        )
+        label = _caption_crop(crop)
+
+        elem_id = i + 1
+        elements.append(
+            {
+                "id": elem_id,
+                "label": label,
+                "x": cx,
+                "y": cy,
+                "w": w,
+                "h": h,
+                "conf": round(conf, 3),
+            }
+        )
+
+        if draw_labels:
+            # Draw coloured bounding box
+            color = _id_color(elem_id)
+            draw.rectangle([x1o, y1o, x2o, y2o], outline=color, width=2)
+            # Draw ID badge
+            tag = str(elem_id)
+            bbox = draw.textbbox((0, 0), tag, font=font)
+            tw = bbox[2] - bbox[0]
+            th = bbox[3] - bbox[1]
+            draw.rectangle(
+                [x1o, y1o - th - 4, x1o + tw + 6, y1o],
+                fill=color,
+            )
+            draw.text((x1o + 3, y1o - th - 3), tag, fill="white", font=font)
+
+    return annotated, elements
+
+
+def elements_to_text(elements: list[dict]) -> str:
+    """
+    Format element list as a compact text block for the VLM prompt.
+    Mirrors the style used in jobhunter/os_actions.py.
+    """
+    if not elements:
+        return "No interactive elements detected."
+    lines = ["Detected UI elements (id | label | center x,y):"]
+    for el in elements:
+        lines.append(
+            f"  [{el['id']:2d}]  {el['label'][:40]:40s}  "
+            f"x={el['x']:4d}  y={el['y']:4d}"
+        )
+    return "\n".join(lines)
+
+
+def _id_color(elem_id: int) -> str:
+    """Cycle through distinct colours for element boxes."""
+    palette = [
+        "#E94B3B",
+        "#2BC0E4",
+        "#F5A623",
+        "#7ED321",
+        "#BD10E0",
+        "#4A90E2",
+        "#D0021B",
+        "#417505",
+        "#9013FE",
+        "#F8E71C",
+    ]
+    return palette[(elem_id - 1) % len(palette)]
+
+```
 
 ### audio/__init__.py
 
@@ -652,6 +1204,43 @@ from config.prompt import (
 
 ```
 
+### config/agent.py
+
+```python
+# config/agent.py
+# ─────────────────────────────────────────────────────────────────────────────
+# Screen agent configuration — mirrors config/vlm.py style.
+# ─────────────────────────────────────────────────────────────────────────────
+from pathlib import Path
+
+BASE_DIR = Path(__file__).parent.parent
+
+# ── OmniParser ─────────────────────────────────────────────────────────────
+# Path to the OmniParser weights/ folder.
+# After cloning https://github.com/microsoft/OmniParser and running
+# python weights/download_weights.py, set this to that weights/ directory.
+OMNIPARSER_WEIGHTS_DIR = str(BASE_DIR / "models" / "omniparser" / "weights")
+
+# Caption model: "blip2" (lighter, faster) or "florence2" (smarter, slower)
+OMNIPARSER_CAPTION_MODEL = "florence2"
+
+# ── Agent loop ─────────────────────────────────────────────────────────────
+AGENT_MAX_STEPS = 30  # hard limit — stops infinite loops
+AGENT_STEP_DELAY = 1.2  # seconds between actions (let UI settle)
+AGENT_SCREENSHOT_W = 1280  # VLM receives screenshot at this width
+AGENT_SCREENSHOT_H = 800
+
+# ── VLM call (reuses your existing vlm.py server) ─────────────────────────
+# Inherits VLM_SERVER_PORT from config/vlm.py — no duplication needed.
+AGENT_MAX_TOKENS = 256
+AGENT_TEMPERATURE = 0.1  # low = deterministic action decisions
+
+# ── Action execution ────────────────────────────────────────────────────────
+AGENT_ACTION_DELAY_MS = 800  # ms pause after each click/type
+AGENT_TYPE_INTERVAL = 0.05  # seconds between keystrokes (human-like)
+
+```
+
 ### config/features.py
 
 ```python
@@ -665,10 +1254,10 @@ from config.prompt import (
 #   "voice_to_text_chat"    → Mic → Whisper → LLM → print response (no TTS)
 #   "full"                  → Mic → Whisper → LLM → TTS (everything)
 
-MODE = "voice_screen"
+MODE = "vision_text"
 
 # ── Derived flags (do not edit) ───────────────────────────────
-ENABLE_STT = MODE in ("tts_only", "voice_to_text_chat", "full")
+ENABLE_STT = MODE in ("stt_only", "voice_to_text_chat", "full")
 ENABLE_TTS = MODE in ("tts_only", "full")
 ENABLE_LLM = MODE in ("text_to_text_chat", "voice_to_text_chat", "full", "tts_only")
 ENABLE_SERVER = MODE == "server"
@@ -792,6 +1381,10 @@ SILERO_THRESHOLD = 0.45  # was 0.5 — only triggers on high-confidence speech
 DENOISE_ENABLED = False
 PUSH_TO_TALK = False
 
+WAKE_WORD = "follow"
+WAKE_WORD_ENABLED = True
+SLEEP_WORD = "sleep"
+
 ```
 
 ### config/vlm.py
@@ -855,2219 +1448,6 @@ def _resolve_device() -> str:
 
 WHISPER_DEVICE = _resolve_device()
 print(f"[Config] Whisper device: {WHISPER_DEVICE}")
-
-```
-
-### jobhunter/__init_.py
-
-```python
-# jobhunter/__init__.py
-
-from jobhunter.config import (
-    VLM_SERVER_PORT,
-    MAX_ACTIONS_PER_PAGE,
-    MAX_JOBS_PER_SITE,
-    MIN_SCORE_TO_SAVE,
-)
-from jobhunter.logger import log
-from jobhunter.storage import save_job, is_seen, get_stats
-from jobhunter.os_snap import snap_screen_b64
-from jobhunter.os_browser import (
-    launch_chrome,
-    bring_chrome_to_front,
-    navigate,
-    click,
-    type_text,
-    scroll,
-    press_enter,
-    find_text_on_screen,
-)
-from jobhunter.os_actions import decide_action, execute_action
-from jobhunter.lg_agent import hunt_site, run_full_hunt
-
-```
-
-### jobhunter/actions.py
-
-```python
-# jobhunter/actions.py
-# ─────────────────────────────────────────────────────────────────────────────
-# Executes browser actions from VLM decisions using Playwright.
-# VLM says: {"action": "click", "x": 432, "y": 287}
-# This module does: page.mouse.click(432, 287)
-# ─────────────────────────────────────────────────────────────────────────────
-
-import time
-from jobhunter.config import ACTION_DELAY_MS, PAGE_LOAD_WAIT_MS
-
-
-def execute_action(action: dict) -> str:
-    """
-    Execute a single action from VLM output.
-    Returns the action type executed, or "unknown" if unrecognised.
-    """
-    from jobhunter.browser import get_browser, navigate
-
-    page = get_browser()
-    action_type = action.get("action", "unknown")
-
-    try:
-        if action_type == "click":
-            x = int(action.get("x", 0))
-            y = int(action.get("y", 0))
-            # Human-like: move then click
-            page.mouse.move(x, y)
-            time.sleep(0.1)
-            page.mouse.click(x, y)
-            page.wait_for_timeout(ACTION_DELAY_MS)
-
-        elif action_type == "type":
-            text = action.get("text", "")
-            page.keyboard.type(text, delay=50)  # 50ms between keys = human-like
-            page.wait_for_timeout(500)
-
-        elif action_type == "scroll":
-            direction = action.get("direction", "down")
-            delta = 600 if direction == "down" else -600
-            page.mouse.wheel(0, delta)
-            page.wait_for_timeout(ACTION_DELAY_MS)
-
-        elif action_type == "wait":
-            page.wait_for_timeout(PAGE_LOAD_WAIT_MS)
-
-        elif action_type == "navigate":
-            url = action.get("url", "")
-            if url:
-                navigate(url)
-
-        elif action_type in ("extract", "done"):
-            pass  # handled by caller
-
-        else:
-            print(f"[Actions] Unknown action type: {action_type}")
-
-    except Exception as e:
-        print(f"[Actions] Failed to execute {action_type}: {e}")
-
-    return action_type
-
-
-def press_enter():
-    """Press Enter key — useful after typing search queries."""
-    from jobhunter.browser import get_browser
-    page = get_browser()
-    page.keyboard.press("Enter")
-    page.wait_for_timeout(PAGE_LOAD_WAIT_MS)
-
-
-def click_at(x: int, y: int):
-    """Direct click — used for known coordinates."""
-    from jobhunter.browser import get_browser
-    page = get_browser()
-    page.mouse.move(x, y)
-    time.sleep(0.15)
-    page.mouse.click(x, y)
-    page.wait_for_timeout(ACTION_DELAY_MS)
-
-
-def type_text(text: str):
-    """Type text with human-like delay."""
-    from jobhunter.browser import get_browser
-    page = get_browser()
-    page.keyboard.type(text, delay=60)
-    page.wait_for_timeout(400)
-
-```
-
-### jobhunter/agent.py
-
-```python
-# jobhunter/agent.py
-# ─────────────────────────────────────────────────────────────────────────────
-# The core VLM agent loop.
-# Takes ONE screenshot → asks VLM what to do → executes → repeats.
-# This is the "eyes + brain" of the job hunter.
-#
-# Flow per site per query:
-#   1. Navigate to site
-#   2. VLM sees page → decides: type search / click / scroll / extract / done
-#   3. Execute action
-#   4. Repeat until VLM says "extract" or "done" or max actions reached
-#   5. Extract job listings from page
-#   6. Score each job against profile
-#   7. Save high-scoring jobs to CSV
-# ─────────────────────────────────────────────────────────────────────────────
-
-import time
-from jobhunter.config import MAX_ACTIONS_PER_PAGE, MAX_JOBS_PER_SITE, MIN_SCORE_TO_SAVE
-from jobhunter.vlm_query import decide_action, extract_jobs_from_page, score_job
-from jobhunter.actions import execute_action
-from jobhunter.storage import save_job, is_seen
-from jobhunter.logger import log
-
-
-# ── Entry URLs per site ────────────────────────────────────────────────────
-SITE_URLS = {
-    "linkedin":  "https://www.linkedin.com/jobs",
-    "indeed":    "https://www.indeed.com",
-    "naukri":    "https://www.naukri.com",
-    "wellfound": "https://wellfound.com/jobs",
-}
-
-
-def hunt_site(site: str, query: str, profile: dict) -> int:
-    """
-    Run the VLM agent on one site with one search query.
-    Returns the number of NEW jobs saved.
-    """
-    from jobhunter.browser import navigate
-
-    log(f"[{site.upper()}] Starting hunt for: '{query}'")
-
-    # ── Step 1: Navigate to site ──────────────────────────────────────────
-    url = SITE_URLS.get(site, "https://www.google.com")
-    navigate(url)
-
-    # ── Step 2: VLM action loop ───────────────────────────────────────────
-    goal = (
-        f"Search for '{query}' jobs on this site. "
-        f"Type the query in the search box, press enter, "
-        f"then scroll through results. "
-        f"When you can see job listings, say action=extract."
-    )
-
-    jobs_saved = 0
-    total_extracted = 0
-
-    for step in range(MAX_ACTIONS_PER_PAGE):
-        log(f"[{site.upper()}] Step {step+1}/{MAX_ACTIONS_PER_PAGE}")
-
-        action = decide_action(goal)
-        action_type = action.get("action", "unknown")
-
-        if action_type == "done":
-            log(f"[{site.upper()}] VLM says done.")
-            break
-
-        if action_type == "extract":
-            # ── Step 3: Extract jobs from current page view ───────────────
-            log(f"[{site.upper()}] Extracting jobs from page...")
-            jobs = extract_jobs_from_page()
-            total_extracted += len(jobs)
-
-            # ── Step 4: Score and save each job ───────────────────────────
-            for job in jobs:
-                title   = job.get("title", "")
-                company = job.get("company", "")
-
-                if not title or not company:
-                    continue
-
-                # Skip if already seen
-                if is_seen(title, company, site):
-                    log(f"  [SKIP] Already seen: {title} @ {company}")
-                    continue
-
-                # Quick keyword filter before spending VLM tokens on scoring
-                avoid = profile.get("avoid_keywords", [])
-                combined_text = f"{title} {job.get('snippet', '')}".lower()
-                if any(kw.lower() in combined_text for kw in avoid):
-                    log(f"  [SKIP] Avoided keyword in: {title}")
-                    continue
-
-                # Score the job
-                score_result = score_job(job, profile)
-                score        = int(score_result.get("score", 5))
-                reason       = score_result.get("reason", "")
-
-                if score >= MIN_SCORE_TO_SAVE:
-                    saved = save_job(job, site, score, reason)
-                    if saved:
-                        jobs_saved += 1
-                        log(f"  [SAVED ★{score}] {title} @ {company} — {reason}")
-                    else:
-                        log(f"  [DUP] {title} @ {company}")
-                else:
-                    log(f"  [LOW ★{score}] {title} @ {company} — {reason}")
-
-                if total_extracted >= MAX_JOBS_PER_SITE:
-                    log(f"[{site.upper()}] Reached max jobs limit ({MAX_JOBS_PER_SITE})")
-                    return jobs_saved
-
-            # After extraction, scroll to see more jobs
-            goal = (
-                "Scroll down to see more job listings. "
-                "If more listings are visible, say action=extract again. "
-                "If no more listings, say action=done."
-            )
-
-        else:
-            # Execute navigation action (click, type, scroll, wait, navigate)
-            execute_action(action)
-
-    log(f"[{site.upper()}] Done. Saved {jobs_saved} new jobs from '{query}'.")
-    return jobs_saved
-
-
-def run_full_hunt(profile: dict, search_queries: dict) -> dict:
-    """
-    Run the full job hunt across all sites and all queries.
-    Returns a summary dict.
-    """
-    from jobhunter.storage import get_stats
-
-    summary = {}
-    total_new = 0
-
-    for site, queries in search_queries.items():
-        site_new = 0
-        for query in queries:
-            try:
-                new = hunt_site(site, query, profile)
-                site_new += new
-                total_new += new
-                # Small pause between queries — be polite to the server
-                time.sleep(3)
-            except Exception as e:
-                log(f"[ERROR] {site} / '{query}': {e}")
-        summary[site] = site_new
-        log(f"[SUMMARY] {site}: {site_new} new jobs")
-
-    stats = get_stats()
-    log(
-        f"\n{'='*50}\n"
-        f"HUNT COMPLETE\n"
-        f"  New this run:  {total_new}\n"
-        f"  Found today:   {stats['today']}\n"
-        f"  Total in DB:   {stats['total']}\n"
-        f"{'='*50}\n"
-    )
-
-    return {"new_this_run": total_new, "stats": stats, "by_site": summary}
-
-```
-
-### jobhunter/browser.py
-
-```python
-# jobhunter/browser.py
-# ─────────────────────────────────────────────────────────────────────────────
-# Launches Playwright Chromium and injects real Chrome cookies from Keychain.
-# Fixes: cookie field validation, browser stability, reconnection handling.
-# ─────────────────────────────────────────────────────────────────────────────
-
-import threading
-import time
-from jobhunter.config import SCREENSHOT_WIDTH, SCREENSHOT_HEIGHT
-
-COOKIE_DOMAINS = [
-    "linkedin.com",
-    "indeed.com",
-    "naukri.com",
-    "wellfound.com",
-    "google.com",
-]
-
-_browser    = None   # keep browser alive at module level
-_context    = None
-_page       = None
-_playwright = None
-_lock       = threading.Lock()
-
-
-def _clean_cookie(c) -> dict | None:
-    """
-    Convert a browser_cookie3 cookie into a valid Playwright cookie dict.
-    Returns None if the cookie should be skipped.
-    """
-    import time as _time
-
-    name  = getattr(c, "name",  None)
-    value = getattr(c, "value", None)
-
-    # Skip cookies with missing required fields
-    if not name or value is None:
-        return None
-
-    # Domain: must start with dot for cross-subdomain cookies
-    domain = getattr(c, "domain", "") or ""
-    if not domain:
-        return None
-    if not domain.startswith("."):
-        domain = "." + domain
-
-    # Path
-    path = getattr(c, "path", "/") or "/"
-
-    # Expiry: must be a positive number in the future, or omitted
-    expires = getattr(c, "expires", None)
-    cookie = {
-        "name":     name,
-        "value":    str(value),
-        "domain":   domain,
-        "path":     path,
-        "secure":   bool(getattr(c, "secure", False)),
-        "httpOnly": False,
-        "sameSite": "Lax",
-    }
-
-    # Only add expires if it's a valid future timestamp
-    if expires and isinstance(expires, (int, float)) and expires > _time.time():
-        cookie["expires"] = float(expires)
-
-    return cookie
-
-
-def _get_cookies() -> list[dict]:
-    """Read Chrome cookies from macOS Keychain and clean them for Playwright."""
-    try:
-        import browser_cookie3
-    except ImportError:
-        raise RuntimeError("Run: pip install browser-cookie3")
-
-    print("[Browser] Reading cookies from macOS Keychain...")
-    all_cookies = []
-    seen = set()
-
-    for domain in COOKIE_DOMAINS:
-        try:
-            jar = browser_cookie3.chrome(domain_name=domain)
-            for c in jar:
-                cleaned = _clean_cookie(c)
-                if cleaned is None:
-                    continue
-                # Deduplicate by name+domain
-                key = (cleaned["name"], cleaned["domain"])
-                if key in seen:
-                    continue
-                seen.add(key)
-                all_cookies.append(cleaned)
-        except Exception as e:
-            print(f"[Browser] Skipped {domain}: {e}")
-
-    print(f"[Browser] {len(all_cookies)} valid cookies loaded ✓")
-    return all_cookies
-
-
-def _create_browser_and_page():
-    """Launch Playwright browser, inject cookies, return (browser, context, page)."""
-    global _playwright
-
-    from playwright.sync_api import sync_playwright
-
-    if _playwright is None:
-        _playwright = sync_playwright().start()
-
-    cookies = _get_cookies()
-
-    print("[Browser] Launching browser...")
-    browser = _playwright.chromium.launch(
-        headless=False,
-        args=[
-            f"--window-size={SCREENSHOT_WIDTH},{SCREENSHOT_HEIGHT}",
-            "--disable-blink-features=AutomationControlled",
-            "--no-sandbox",
-            "--disable-web-security",
-            "--disable-features=IsolateOrigins,site-per-process",
-        ],
-    )
-
-    context = browser.new_context(
-        viewport={"width": SCREENSHOT_WIDTH, "height": SCREENSHOT_HEIGHT},
-        user_agent=(
-            "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
-            "AppleWebKit/537.36 (KHTML, like Gecko) "
-            "Chrome/122.0.0.0 Safari/537.36"
-        ),
-    )
-
-    # Inject cookies one by one — skip any that still fail
-    injected, failed = 0, 0
-    for cookie in cookies:
-        try:
-            context.add_cookies([cookie])
-            injected += 1
-        except Exception:
-            failed += 1
-
-    print(f"[Browser] Injected {injected} cookies ({failed} skipped) ✓")
-
-    page = context.new_page()
-
-    # Keep browser alive — attach close handler to detect crashes
-    def _on_close():
-        print("[Browser] Browser window was closed.")
-
-    browser.on("disconnected", _on_close)
-
-    return browser, context, page
-
-
-def get_browser():
-    """Get a ready page. Auto-recovers if browser was closed."""
-    global _browser, _context, _page, _playwright
-
-    # Fast path — check if existing page is alive
-    if _page is not None:
-        try:
-            _ = _page.url   # lightweight liveness check (cheaper than title())
-            return _page
-        except Exception:
-            print("[Browser] Page lost — relaunching browser...")
-            _page    = None
-            _context = None
-            _browser = None
-
-    with _lock:
-        if _page is not None:
-            return _page
-
-        _browser, _context, _page = _create_browser_and_page()
-        print(f"[Browser] Ready ✓ — logged in as swapnilhgf@gmail.com")
-
-    return _page
-
-
-def release_browser():
-    """Close the job hunter browser. Your real Chrome is untouched."""
-    global _browser, _context, _page, _playwright
-
-    with _lock:
-        _page = None
-        _context = None
-
-        if _browser:
-            try:
-                _browser.close()
-            except Exception:
-                pass
-            _browser = None
-
-        if _playwright:
-            try:
-                _playwright.stop()
-            except Exception:
-                pass
-            _playwright = None
-
-        print("[Browser] Closed. Your Chrome is untouched.")
-
-
-def navigate(url: str) -> None:
-    from jobhunter.config import PAGE_LOAD_WAIT_MS
-    page = get_browser()
-    try:
-        page.goto(url, wait_until="domcontentloaded", timeout=30000)
-        page.wait_for_timeout(PAGE_LOAD_WAIT_MS)
-    except Exception as e:
-        print(f"[Browser] Navigation error: {e} — retrying...")
-        time.sleep(2)
-        page = get_browser()
-        page.goto(url, wait_until="domcontentloaded", timeout=30000)
-        page.wait_for_timeout(PAGE_LOAD_WAIT_MS)
-
-
-def current_url() -> str:
-    try:
-        return get_browser().url
-    except Exception:
-        return ""
-
-```
-
-### jobhunter/config.py
-
-```python
-# jobhunter/config.py
-# ─────────────────────────────────────────────────────────────────────────────
-# Job hunter runtime configuration — tweak these without touching core logic
-# ─────────────────────────────────────────────────────────────────────────────
-
-from pathlib import Path
-
-# ── Paths ──────────────────────────────────────────────────────────────────
-BASE_DIR    = Path(__file__).parent
-DATA_DIR    = BASE_DIR / "data"
-DB_PATH     = DATA_DIR / "jobs.db"
-CSV_PATH    = DATA_DIR / "jobs_found.csv"
-LOG_PATH    = DATA_DIR / "jobhunter.log"
-
-DATA_DIR.mkdir(parents=True, exist_ok=True)
-
-# ── Scheduler ─────────────────────────────────────────────────────────────
-RUN_EVERY_HOURS = 2       # how often the full hunt cycle runs
-
-# ── VLM settings (mirrors your config/vlm.py style) ──────────────────────
-VLM_SERVER_PORT = 8081    # must match your config/vlm.py VLM_SERVER_PORT
-VLM_MAX_TOKENS  = 120     # slightly more than vision assistant — needs JSON
-VLM_TEMPERATURE = 0.1     # low = consistent, deterministic action decisions
-
-# ── Agent loop limits ──────────────────────────────────────────────────────
-MAX_ACTIONS_PER_PAGE  = 40   # max VLM → click/type steps before giving up
-MAX_JOBS_PER_SITE     = 20   # stop scrolling after collecting this many
-ACTION_DELAY_MS       = 1500 # ms to wait after each action (human-like)
-PAGE_LOAD_WAIT_MS     = 2500 # ms to wait after navigation
-
-# ── Screenshot settings (mirrors your config/vlm.py camera settings) ──────
-SCREENSHOT_WIDTH  = 1280
-SCREENSHOT_HEIGHT = 800
-JPEG_QUALITY      = 75    # higher than camera — need to read text clearly
-
-# ── Scoring thresholds ─────────────────────────────────────────────────────
-MIN_SCORE_TO_SAVE = 5     # VLM scores 1–10; only save jobs >= this score
-
-```
-
-### jobhunter/data/jobs.db
-
-(Skipped: binary or unreadable file)
-
-
-### jobhunter/lg_agent.py
-
-```python
-# jobhunter/lg_agent.py
-# ─────────────────────────────────────────────────────────────────────────────
-# LangGraph-based job hunter agent.
-# Replaces: agent.py + os_actions.py + vlm_query.py
-#
-# Architecture:
-#   LangGraph state machine with nodes:
-#     screenshot → llm_decide → execute_tool → screenshot (loop)
-#                                    ↓
-#                               extract / score / done
-#
-# Tools the LLM can call:
-#   click(x, y)           - click at screen coordinates
-#   type_text(text)        - type text
-#   scroll(direction)      - scroll page
-#   navigate(url)          - go to URL
-#   press_enter()          - press enter key
-#   extract_jobs()         - extract job listings from current screen
-#   mark_done()            - signal agent to stop
-# ─────────────────────────────────────────────────────────────────────────────
-
-from __future__ import annotations
-
-import json
-import base64
-import time
-from typing import Annotated, TypedDict, Literal
-
-from langchain_core.messages import HumanMessage, SystemMessage, AIMessage, ToolMessage
-from langchain_core.tools import tool
-from langchain_openai import ChatOpenAI
-from langgraph.graph import StateGraph, END
-from langgraph.graph.message import add_messages
-from pydantic import BaseModel, Field
-
-from jobhunter.os_snap import snap_screen_b64
-from jobhunter.os_browser import (
-    click as _click,
-    type_text as _type_text,
-    scroll as _scroll,
-    navigate as _navigate,
-    press_enter as _press_enter,
-    bring_chrome_to_front,
-)
-from jobhunter.storage import save_job, is_seen
-from jobhunter.logger import log
-from jobhunter.config import (
-    VLM_SERVER_PORT,
-    MAX_ACTIONS_PER_PAGE,
-    MAX_JOBS_PER_SITE,
-    MIN_SCORE_TO_SAVE,
-)
-
-
-# ── LangChain-compatible local VLM client ──────────────────────────────────
-def get_vlm() -> ChatOpenAI:
-    """
-    Point LangChain at your local llama-server.
-    Uses ChatOpenAI because llama-server exposes an OpenAI-compatible API.
-    """
-    return ChatOpenAI(
-        model="local-vlm",                               # name doesn't matter
-        base_url=f"http://localhost:{VLM_SERVER_PORT}/v1",
-        api_key="not-needed",                            # llama-server ignores this
-        max_tokens=256,
-        temperature=0.1,
-    )
-
-
-# ── Agent state ────────────────────────────────────────────────────────────
-class AgentState(TypedDict):
-    messages: Annotated[list, add_messages]   # full conversation history
-    goal: str                                  # current high-level goal
-    jobs_found: list[dict]                     # extracted jobs so far
-    steps_taken: int                           # loop counter
-    done: bool                                 # stop signal
-
-
-# ── Tool definitions ────────────────────────────────────────────────────────
-# Each @tool is a real OS action the LLM can call by name.
-# LangChain handles argument parsing and dispatch automatically.
-
-@tool
-def click(
-    x: Annotated[int, Field(description="X coordinate in 640x400 screenshot space")],
-    y: Annotated[int, Field(description="Y coordinate in 640x400 screenshot space")],
-) -> str:
-    """Click at the given screen coordinates."""
-    _click(x, y)
-    time.sleep(0.8)
-    return f"Clicked at ({x}, {y})"
-
-
-@tool
-def type_text(
-    text: Annotated[str, Field(description="Text to type into the focused element")],
-) -> str:
-    """Type text using the keyboard."""
-    _type_text(text)
-    time.sleep(0.4)
-    return f"Typed: {text}"
-
-
-@tool
-def scroll(
-    direction: Annotated[Literal["down", "up"], Field(description="Scroll direction")] = "down",
-) -> str:
-    """Scroll the page up or down."""
-    _scroll(direction)
-    return f"Scrolled {direction}"
-
-
-@tool
-def navigate_to(
-    url: Annotated[str, Field(description="Full URL to navigate to")],
-) -> str:
-    """Navigate Chrome to a URL using the address bar."""
-    _navigate(url)
-    return f"Navigated to {url}"
-
-
-@tool
-def press_enter() -> str:
-    """Press the Enter key."""
-    _press_enter()
-    return "Pressed Enter"
-
-
-@tool
-def extract_jobs() -> str:
-    """
-    Extract all visible job listings from the current screen.
-    Call this when you can see a list of job postings.
-    Returns JSON array of jobs found.
-    """
-    from langchain_core.messages import HumanMessage
-    from langchain_openai import ChatOpenAI
-
-    screenshot_b64 = snap_screen_b64()
-
-    extraction_llm = ChatOpenAI(
-        model="local-vlm",
-        base_url=f"http://localhost:{VLM_SERVER_PORT}/v1",
-        api_key="not-needed",
-        max_tokens=600,
-        temperature=0.0,
-    )
-
-    system = (
-        "You are a job listing extractor. Extract ALL visible job listings from the screenshot. "
-        "Respond with ONLY a JSON array, no markdown, no explanation.\n"
-        'Each item: {"title":"...","company":"...","location":"...","salary":null,"posted":null,"url":null,"snippet":null}'
-    )
-
-    msg = HumanMessage(content=[
-        {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{screenshot_b64}"}},
-        {"type": "text", "text": "Extract all visible job listings as a JSON array."},
-    ])
-
-    try:
-        response = extraction_llm.invoke([SystemMessage(content=system), msg])
-        raw = response.content.strip().lstrip("```json").lstrip("```").rstrip("```")
-        jobs = json.loads(raw)
-        if isinstance(jobs, list):
-            log(f"[Extract] Found {len(jobs)} jobs")
-            return json.dumps(jobs)
-    except Exception as e:
-        log(f"[Extract] Failed: {e}")
-
-    return "[]"
-
-
-@tool
-def score_job_against_profile(
-    job_json: Annotated[str, Field(description="JSON string of a single job dict")],
-    profile_json: Annotated[str, Field(description="JSON string of the candidate profile")],
-) -> str:
-    """
-    Score a job listing against a candidate profile.
-    Returns JSON: {"score": 1-10, "reason": "...", "good_match": true/false}
-    """
-    from langchain_openai import ChatOpenAI
-
-    scoring_llm = ChatOpenAI(
-        model="local-vlm",
-        base_url=f"http://localhost:{VLM_SERVER_PORT}/v1",
-        api_key="not-needed",
-        max_tokens=100,
-        temperature=0.0,
-    )
-
-    system = (
-        "You are a job relevance scorer for a junior software developer. "
-        "Score the job 1-10. Respond ONLY with JSON: "
-        '{"score": N, "reason": "one sentence", "good_match": true/false}'
-    )
-
-    try:
-        job = json.loads(job_json)
-        profile = json.loads(profile_json)
-        prompt = (
-            f"Job: {json.dumps(job)}\n"
-            f"Profile titles: {profile.get('job_titles', [])}\n"
-            f"Skills: {profile.get('skills', [])}\n"
-            f"Experience: {profile.get('years_experience', 1)} year(s)\n"
-            f"Avoid keywords: {profile.get('avoid_keywords', [])}\n"
-            f"Score this job."
-        )
-        response = scoring_llm.invoke([SystemMessage(content=system), HumanMessage(content=prompt)])
-        return response.content.strip()
-    except Exception as e:
-        return json.dumps({"score": 5, "reason": str(e), "good_match": True})
-
-
-@tool
-def mark_done(reason: Annotated[str, Field(description="Why you are done")] = "") -> str:
-    """Signal that you have finished the current goal."""
-    return f"Done: {reason}"
-
-
-# All tools the agent can use
-TOOLS = [click, type_text, scroll, navigate_to, press_enter, extract_jobs, mark_done]
-TOOL_MAP = {t.name: t for t in TOOLS}
-
-
-# ── Graph nodes ────────────────────────────────────────────────────────────
-SYSTEM_PROMPT = """You are a browser automation agent controlling a real macOS Chrome browser.
-You see a screenshot of the current screen after every action.
-
-You have these tools:
-- click(x, y): click at coordinates in 640x400 screenshot space
-- type_text(text): type text
-- scroll(direction): scroll up or down  
-- navigate_to(url): go to a URL
-- press_enter(): press Enter
-- extract_jobs(): extract job listings from the current screen
-- mark_done(reason): signal you are finished
-
-Rules:
-- Take ONE action at a time
-- After typing in a search box, call press_enter()
-- When you can see job listings on screen, call extract_jobs()
-- When there are no more jobs to find, call mark_done()
-- The screenshot is 640x400 pixels. x=0 is LEFT, x=640 is RIGHT, y=0 is TOP, y=400 is BOTTOM
-- Be precise — click the CENTER of buttons and input fields
-- NEVER return x or y as a list. Always return a single integer for x and a single integer for y.
-
-"""
-
-
-def screenshot_node(state: AgentState) -> AgentState:
-    if state["steps_taken"] >= MAX_ACTIONS_PER_PAGE:
-        log(f"[Agent] Max steps reached ({MAX_ACTIONS_PER_PAGE})")
-        return {**state, "done": True}
-
-    log(f"[Agent] Step {state['steps_taken'] + 1} — taking screenshot")
-    bring_chrome_to_front()   # ← add this
-    time.sleep(0.5)           # ← give Chrome time to come to foreground
-    b64 = snap_screen_b64()
-
-    msg = HumanMessage(content=[
-        {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{b64}"}},
-        {"type": "text", "text": f"Goal: {state['goal']}\n\nWhat is the next action?"},
-    ])
-
-    return {
-        **state,
-        "messages": state["messages"] + [msg],
-        "steps_taken": state["steps_taken"] + 1,
-    }
-
-
-def llm_node(state: AgentState) -> AgentState:
-    """Ask the LLM what to do next, with tool calling enabled."""
-    vlm = get_vlm().bind_tools(TOOLS)
-
-    messages = [SystemMessage(content=SYSTEM_PROMPT)] + state["messages"][-2:]
-
-    try:
-        response = vlm.invoke(messages)
-    except Exception as e:
-        log(f"[Agent] LLM call failed: {e}")
-        return {**state, "done": True}
-
-    return {**state, "messages": state["messages"] + [response]}
-
-
-def tool_node(state: AgentState) -> AgentState:
-    """Execute whatever tool the LLM called."""
-    last_msg = state["messages"][-1]
-
-    if not hasattr(last_msg, "tool_calls") or not last_msg.tool_calls:
-        log("[Agent] No tool call in LLM response — ending.")
-        return {**state, "done": True}
-
-    tool_results = []
-    new_jobs = list(state["jobs_found"])
-    done = state["done"]
-
-    for tool_call in last_msg.tool_calls:
-        tool_name = tool_call["name"]
-        tool_args = tool_call["args"]
-
-        # Fix: VLM sometimes returns x as [x, y] list
-        if "x" in tool_args and isinstance(tool_args["x"], list):
-            tool_args["y"] = tool_args["x"][1]
-            tool_args["x"] = tool_args["x"][0]
-
-        log(f"[Agent] Tool: {tool_name}({tool_args})")
-
-        if tool_name not in TOOL_MAP:
-            result = f"Unknown tool: {tool_name}"
-        else:
-            try:
-                result = TOOL_MAP[tool_name].invoke(tool_args)
-            except Exception as e:
-                result = f"Error: {e}"
-
-        # Handle extract_jobs result — parse and store jobs
-        if tool_name == "extract_jobs":
-            try:
-                jobs = json.loads(result)
-                for job in jobs:
-                    if job.get("title") and job.get("company"):
-                        new_jobs.append(job)
-                log(f"[Agent] Total jobs collected: {len(new_jobs)}")
-            except Exception:
-                pass
-
-        # Handle mark_done
-        if tool_name == "mark_done":
-            done = True
-
-        tool_results.append(
-            ToolMessage(content=str(result), tool_call_id=tool_call["id"])
-        )
-
-    return {
-        **state,
-        "messages": state["messages"] + tool_results,
-        "jobs_found": new_jobs,
-        "done": done,
-    }
-
-
-def should_continue(state: AgentState) -> Literal["screenshot", "end"]:
-    """Decide whether to take another screenshot or stop."""
-    if state["done"]:
-        return "end"
-    if state["steps_taken"] >= MAX_ACTIONS_PER_PAGE:
-        return "end"
-    if len(state["jobs_found"]) >= MAX_JOBS_PER_SITE:
-        return "end"
-    return "screenshot"
-
-
-# ── Build the graph ────────────────────────────────────────────────────────
-def build_agent() -> any:
-    graph = StateGraph(AgentState)
-
-    graph.add_node("screenshot", screenshot_node)
-    graph.add_node("llm",        llm_node)
-    graph.add_node("tools",      tool_node)
-
-    graph.set_entry_point("screenshot")
-    graph.add_edge("screenshot", "llm")
-    graph.add_edge("llm",        "tools")
-    graph.add_conditional_edges("tools", should_continue, {
-        "screenshot": "screenshot",
-        "end":        END,
-    })
-
-    return graph.compile()
-
-def _handle_login_if_needed(site: str) -> None:
-    from jobhunter.os_actions import decide_action, execute_action
-    from jobhunter.os_browser import find_text_on_screen
-    import pyautogui
-
-    for attempt in range(10):
-        bring_chrome_to_front()
-        time.sleep(0.5)
-
-        # Try OCR first — find exact coordinates of known elements
-        for search_text in ["swapnilhgf@gmail.com", "Sign in", "Sign In"]:
-            coords = find_text_on_screen(search_text)
-            if coords:
-                lx, ly = coords
-                log(f"[Login] OCR found '{search_text}' at ({lx},{ly}) — clicking")
-                pyautogui.click(lx, ly)
-                time.sleep(2.5)
-                # Check if now logged in
-                if find_text_on_screen("Search") or find_text_on_screen("Jobs"):
-                    log(f"[Login] Logged in to {site}")
-                    return
-                break
-        else:
-            # OCR found nothing — fall back to VLM
-            action = decide_action(
-                f"Look at the screen. What login step is visible? "
-                f"Click the appropriate element. Coordinates are 640x400 max."
-            )
-            atype = action.get("action", "unknown")
-            if atype == "already_open":
-                return
-            if atype in ("click", "type", "press_enter"):
-                execute_action(action)
-                time.sleep(2.5)
-
-# ── High-level hunt function ───────────────────────────────────────────────
-def hunt_site(site: str, query: str, profile: dict) -> int:
-    """
-    Run the LangGraph agent on one site with one search query.
-    Returns the number of new jobs saved.
-    """
-    SITE_URLS = {
-        "linkedin":  "https://www.linkedin.com/jobs",
-        "indeed":    "https://www.indeed.com",
-        "naukri":    "https://www.naukri.com",
-        "wellfound": "https://wellfound.com/jobs",
-    }
-
-    url = SITE_URLS.get(site, "https://www.google.com")
-    log(f"[{site.upper()}] Navigating to {url}")
-    bring_chrome_to_front()
-    _navigate(url)
-    _handle_login_if_needed(site)
-
-    goal = (
-        f"Search for '{query}' jobs on this site. "
-        f"Type the query in the search box, press enter, scroll through results. "
-        f"When you see job listings call extract_jobs(). "
-        f"After extracting, scroll down and extract again. "
-        f"Call mark_done() when finished."
-    )
-
-    agent = build_agent()
-
-    initial_state: AgentState = {
-        "messages":    [],
-        "goal":        goal,
-        "jobs_found":  [],
-        "steps_taken": 0,
-        "done":        False,
-    }
-
-    log(f"[{site.upper()}] Starting LangGraph agent for: '{query}'")
-    final_state = agent.invoke(initial_state)
-
-    # Score and save collected jobs
-    jobs_saved = 0
-    profile_json = json.dumps(profile)
-
-    for job in final_state["jobs_found"]:
-        title   = job.get("title", "")
-        company = job.get("company", "")
-
-        if not title or not company:
-            continue
-        if is_seen(title, company, site):
-            log(f"  [SKIP] Already seen: {title} @ {company}")
-            continue
-
-        avoid = profile.get("avoid_keywords", [])
-        combined = f"{title} {job.get('snippet', '')}".lower()
-        if any(kw.lower() in combined for kw in avoid):
-            log(f"  [SKIP] Avoided keyword in: {title}")
-            continue
-
-        # Score the job
-        try:
-            raw_score = score_job_against_profile.invoke({
-                "job_json": json.dumps(job),
-                "profile_json": profile_json,
-            })
-            score_data = json.loads(raw_score)
-        except Exception:
-            score_data = {"score": 5, "reason": "parse error", "good_match": True}
-
-        score  = int(score_data.get("score", 5))
-        reason = score_data.get("reason", "")
-
-        if score >= MIN_SCORE_TO_SAVE:
-            saved = save_job(job, site, score, reason)
-            if saved:
-                jobs_saved += 1
-                log(f"  [SAVED ★{score}] {title} @ {company} — {reason}")
-        else:
-            log(f"  [LOW ★{score}] {title} @ {company} — {reason}")
-
-    log(f"[{site.upper()}] Done. Saved {jobs_saved} new jobs from '{query}'.")
-    return jobs_saved
-
-
-def run_full_hunt(profile: dict, search_queries: dict) -> dict:
-    """Run the full job hunt across all sites and queries."""
-    from jobhunter.storage import get_stats
-
-    summary = {}
-    total_new = 0
-
-    for site, queries in search_queries.items():
-        site_new = 0
-        for query in queries:
-            try:
-                new = hunt_site(site, query, profile)
-                site_new += new
-                total_new += new
-                time.sleep(3)
-            except Exception as e:
-                log(f"[ERROR] {site} / '{query}': {e}")
-                import traceback
-                log(traceback.format_exc())
-        summary[site] = site_new
-
-    stats = get_stats()
-    log(
-        f"\n{'='*50}\n"
-        f"HUNT COMPLETE — {total_new} new jobs\n"
-        f"Total in DB: {stats['total']}\n"
-        f"{'='*50}\n"
-    )
-    return {"new_this_run": total_new, "stats": stats, "by_site": summary}
-
-```
-
-### jobhunter/logger.py
-
-```python
-# jobhunter/logger.py
-# ─────────────────────────────────────────────────────────────────────────────
-# Simple file + console logger. Mirrors server/logger.py style.
-# ─────────────────────────────────────────────────────────────────────────────
-
-from datetime import datetime
-from jobhunter.config import LOG_PATH
-
-
-def log(message: str) -> None:
-    """Print to console and append to log file."""
-    ts  = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    line = f"[{ts}] {message}"
-    print(line, flush=True)
-    try:
-        with open(LOG_PATH, "a", encoding="utf-8") as f:
-            f.write(line + "\n")
-    except Exception:
-        pass  # never crash because of logging
-
-```
-
-### jobhunter/os_actions.py
-
-```python
-# jobhunter/os_actions.py
-# ─────────────────────────────────────────────────────────────────────────────
-# VLM-guided OS automation actions.
-# Replaces jobhunter/actions.py (which used Playwright).
-# Takes a real screenshot → asks your VLM → executes via pyautogui.
-#
-# Usage:
-#   from jobhunter.os_actions import decide_and_execute, os_navigate
-# ─────────────────────────────────────────────────────────────────────────────
-
-import json
-import re
-import time
-import requests
-
-from jobhunter.os_snap import snap_screen_b64
-from jobhunter.os_browser import (
-    click, double_click, scroll, type_text,
-    press_enter, press_escape, navigate,
-    bring_chrome_to_front,
-)
-from jobhunter.config import VLM_SERVER_PORT, VLM_MAX_TOKENS, VLM_TEMPERATURE
-from jobhunter.logger import log
-
-
-# ── VLM system prompts ──────────────────────────────────────────────────────
-_NAV_SYSTEM = """You are a browser automation agent controlling a REAL macOS Chrome browser via mouse and keyboard.
-You see a screenshot of the current screen.
-Your job is to take ONE action to make progress toward the goal.
-
-You MUST respond with ONLY a JSON object — no explanation, no markdown.
-
-JSON format:
-{
-  "action": "click" | "type" | "scroll" | "wait" | "extract" | "done" | "navigate" | "already_open" | "press_enter" | "hotkey",
-  "x": <pixel x in 1280x800 space, only for click>,
-  "y": <pixel y in 1280x800 space, only for click>,
-  "text": "<text to type, only for type action>",
-  "url": "<url, only for navigate action>",
-  "keys": "<hotkey combo like 'command+l', only for hotkey action>",
-  "direction": "down" | "up",
-  "reason": "<one short sentence why>"
-}
-
-IMPORTANT coordinate rules:
-- The screenshot is 1280x800 pixels
-- x=0 is LEFT edge, x=1280 is RIGHT edge
-- y=0 is TOP edge, y=800 is BOTTOM edge
-- Be precise — click the CENTER of buttons/links/input fields
-"""
-
-_EXTRACT_SYSTEM = """You are a job listing extractor. You see a screenshot of a job search results page.
-Extract ALL visible job listings into a JSON array.
-Respond with ONLY a JSON array — no markdown, no explanation.
-
-Each item:
-{
-  "title": "<job title>",
-  "company": "<company name>",
-  "location": "<location or Remote>",
-  "salary": "<salary if shown, else null>",
-  "posted": "<time posted if shown, else null>",
-  "url": "<job URL if visible, else null>",
-  "snippet": "<brief description if visible, else null>"
-}
-
-If no job listings visible, return: []
-"""
-
-_LOGIN_SYSTEM = """You are helping automate a browser login flow on macOS Chrome.
-You see a screenshot. Identify what login step is currently visible and what to click/type next.
-
-Respond with ONLY a JSON object:
-{
-  "action": "click" | "type" | "press_enter" | "done" | "wait",
-  "x": <x in 1280x800 space>,
-  "y": <y in 1280x800 space>,
-  "text": "<text to type if action=type>",
-  "step": "<what step you see: profile_picker | email_input | password_input | signed_in | captcha | 2fa | other>",
-  "reason": "<one sentence>"
-}
-"""
-
-
-# ── Core VLM call ───────────────────────────────────────────────────────────
-def _call_vlm(screenshot_b64: str, system_prompt: str, user_prompt: str, max_tokens: int = None) -> str:
-    """Single HTTP call to llama-server."""
-    try:
-        response = requests.post(
-            f"http://localhost:{VLM_SERVER_PORT}/v1/chat/completions",
-            json={
-                "messages": [
-                    {"role": "system", "content": system_prompt},
-                    {
-                        "role": "user",
-                        "content": [
-                            {
-                                "type": "image_url",
-                                "image_url": {"url": f"data:image/jpeg;base64,{screenshot_b64}"},
-                            },
-                            {"type": "text", "text": user_prompt},
-                        ],
-                    },
-                ],
-                "max_tokens": max_tokens or VLM_MAX_TOKENS,
-                "temperature": VLM_TEMPERATURE,
-                "stream": False,
-            },
-            timeout=30,
-        )
-        return response.json()["choices"][0]["message"]["content"].strip()
-    except Exception as e:
-        log(f"[VLM] Call failed: {e}")
-        try:
-            log(f"[VLM] Raw response: {response.json()}")
-        except:
-            pass
-        return "{}"
-
-
-def _parse_json(raw: str) -> dict | list:
-    """Robustly extract JSON from VLM response."""
-    raw = raw.strip()
-    raw = re.sub(r"^```(?:json)?\s*", "", raw)
-    raw = re.sub(r"\s*```$", "", raw)
-    try:
-        return json.loads(raw)
-    except Exception:
-        match = re.search(r"(\{.*\}|\[.*\])", raw, re.DOTALL)
-        if match:
-            try:
-                return json.loads(match.group(1))
-            except Exception:
-                pass
-    return {}
-
-
-# ── Action execution ────────────────────────────────────────────────────────
-def execute_action(action: dict) -> str:
-    """Execute a VLM action dict using real OS controls."""
-    action_type = action.get("action", "unknown")
-
-    try:
-        if action_type == "click":
-            vx = action.get("x", 0)
-            vy = action.get("y", 0)
-            # VLM sometimes returns x as [x, y] list — handle it
-            if isinstance(vx, list):
-                vx, vy = vx[0], vx[1]
-            click(int(vx), int(vy))
-            time.sleep(0.8)
-
-        elif action_type == "double_click":
-            vx = int(action.get("x", 0))
-            vy = int(action.get("y", 0))
-            double_click(vx, vy)
-            time.sleep(0.8)
-
-        elif action_type == "type":
-            text = action.get("text", "")
-            if text:
-                type_text(text)
-                time.sleep(0.4)
-
-        elif action_type == "press_enter":
-            press_enter()
-
-        elif action_type == "hotkey":
-            import pyautogui
-            keys = action.get("keys", "").replace("+", " ").split()
-            if keys:
-                pyautogui.hotkey(*keys)
-                time.sleep(0.5)
-
-        elif action_type == "scroll":
-            direction = action.get("direction", "down")
-            scroll(direction, amount=3)
-
-        elif action_type == "navigate":
-            url = action.get("url", "")
-            if url:
-                navigate(url)
-
-        elif action_type == "wait":
-            time.sleep(2.0)
-
-        elif action_type in ("extract", "done", "already_open"):
-            pass  # handled by caller
-
-        else:
-            log(f"[OS Actions] Unknown action: {action_type}")
-
-    except Exception as e:
-        log(f"[OS Actions] Failed to execute {action_type}: {e}")
-
-    return action_type
-
-
-# ── High-level helpers ──────────────────────────────────────────────────────
-def decide_action(goal: str) -> dict:
-    from jobhunter.os_browser import bring_chrome_to_front
-    bring_chrome_to_front()
-    time.sleep(0.4)
-    screenshot = snap_screen_b64()
-    prompt = f"Goal: {goal}\n\nWhat is the single next action? Respond in JSON only."
-    raw = _call_vlm(screenshot, _NAV_SYSTEM, prompt)
-    action = _parse_json(raw)
-    log(f"[VLM→Action] {action.get('action','?')} — {action.get('reason','')}")
-    return action if isinstance(action, dict) else {}
-
-
-def decide_login_step() -> dict:
-    """Screenshot → VLM → login step dict."""
-    screenshot = snap_screen_b64()
-    prompt = "What login step is currently visible? What should I do next?"
-    raw = _call_vlm(screenshot, _LOGIN_SYSTEM, prompt, max_tokens=150)
-    result = _parse_json(raw)
-    log(f"[VLM→Login] step={result.get('step','?')} action={result.get('action','?')}")
-    return result if isinstance(result, dict) else {}
-
-
-def extract_jobs_from_screen() -> list[dict]:
-    """Screenshot → VLM → list of job dicts."""
-    screenshot = snap_screen_b64()
-    prompt = "Extract all visible job listings from this screenshot as a JSON array."
-    raw = _call_vlm(screenshot, _EXTRACT_SYSTEM, prompt, max_tokens=500)
-    result = _parse_json(raw)
-    jobs = result if isinstance(result, list) else []
-    log(f"[VLM→Extract] Found {len(jobs)} jobs on screen")
-    return jobs
-
-
-def os_navigate(url: str) -> None:
-    """Navigate Chrome to URL using keyboard (no Playwright)."""
-    navigate(url)
-
-```
-
-### jobhunter/os_browser.py
-
-```python
-# jobhunter/os_browser.py
-# ─────────────────────────────────────────────────────────────────────────────
-# Real OS-level Chrome automation via pyautogui.
-# No Playwright. Moves the ACTUAL mouse, types on the ACTUAL keyboard.
-#
-# Flow:
-#   1. launch_chrome()          → open Chrome via macOS `open` command
-#   2. select_profile(email)    → VLM sees profile picker, clicks right one
-#   3. navigate(url)            → Cmd+L → type URL → Enter
-#   4. click(x, y)              → raw mouse click (VLM-guided coordinates)
-#   5. type_text(text)          → keyboard typing with human-like delay
-#
-# Coordinate system: VLM returns coords in SNAP_WIDTH×SNAP_HEIGHT space.
-# We scale them to actual screen resolution before clicking.
-# ─────────────────────────────────────────────────────────────────────────────
-
-import time
-import subprocess
-import pyautogui
-from jobhunter.os_snap import snap_screen_b64, get_screen_size, SNAP_WIDTH, SNAP_HEIGHT
-from jobhunter.logger import log
-
-# Safety: pyautogui raises exception if mouse hits screen corner
-pyautogui.FAILSAFE = True
-# Small pause between pyautogui actions to feel human
-pyautogui.PAUSE = 0.05
-
-
-# ── Coordinate scaling ─────────────────────────────────────────────────────
-def _scale_coords(vx: int, vy: int) -> tuple[int, int]:
-    sw, sh = get_screen_size()
-    vx = max(0, min(vx, 640))
-    vy = max(0, min(vy, 400))
-    x = int((640 - vx) * sw / 640)  # mirror x back
-    y = int(vy * sh / 400)
-    return x, y
-
-def find_text_on_screen(text: str) -> tuple[int, int] | None:
-    """Find exact screen coordinates of any visible text using OCR."""
-    import pytesseract
-    from PIL import Image
-    import subprocess, tempfile, os
-
-    with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as tmp:
-        tmp_path = tmp.name
-    try:
-        subprocess.run(["screencapture", "-x", tmp_path], check=True, capture_output=True)
-        img = Image.open(tmp_path)
-        data = pytesseract.image_to_data(img, output_type=pytesseract.Output.DICT)
-        text_lower = text.lower()
-        for i, word in enumerate(data["text"]):
-            if text_lower in word.lower() and int(data["conf"][i]) > 30:
-                x = data["left"][i] + data["width"][i] // 2
-                y = data["top"][i] + data["height"][i] // 2
-                # Convert from physical to logical pixels on Retina
-                sw, sh = get_screen_size()
-                img_w, img_h = img.size
-                lx = int(x * sw / img_w)
-                ly = int(y * sh / img_h)
-                log(f"[OCR] Found '{word}' at logical ({lx},{ly})")
-                return lx, ly
-    except Exception as e:
-        log(f"[OCR] {e}")
-    finally:
-        try: os.unlink(tmp_path)
-        except: pass
-    return None
-
-# ── Chrome launcher ────────────────────────────────────────────────────────
-def launch_chrome() -> None:
-    """
-    Open Google Chrome using macOS `open` command.
-    If Chrome is already open, this brings it to the foreground.
-    """
-    log("[OS] Launching Chrome...")
-    subprocess.Popen(["open", "-a", "Google Chrome"])
-    time.sleep(2.5)  # wait for Chrome to come to foreground
-    log("[OS] Chrome launched.")
-
-
-def bring_chrome_to_front() -> None:
-    """Activate Chrome if it's already open but not focused."""
-    subprocess.run(
-        ["osascript", "-e", 'tell application "Google Chrome" to activate'],
-        capture_output=True
-    )
-    time.sleep(0.8)
-
-
-# ── Profile selection ──────────────────────────────────────────────────────
-def select_profile_vlm(target_email: str, vlm_decide_fn) -> bool:
-    """
-    Use the VLM to find and click the correct Chrome profile.
-    
-    Params:
-        target_email: e.g. "swapnilhgf@gmail.com"
-        vlm_decide_fn: callable(goal: str) → dict with action + x,y coords
-    
-    Returns True if profile was clicked, False if not found.
-    """
-    log(f"[OS] Looking for Chrome profile: {target_email}")
-
-    goal = (
-        f"I can see a Chrome profile picker or Chrome is open. "
-        f"Find the profile for '{target_email}' and click on it. "
-        f"If Chrome shows a 'Who's using Chrome?' screen with profile avatars, "
-        f"click the one matching '{target_email}'. "
-        f"If Chrome is already on the main window (no profile picker), "
-        f"respond with action=already_open. "
-        f"Respond with action=click and x,y coordinates of the profile to click."
-    )
-
-    for attempt in range(5):
-        action = vlm_decide_fn(goal)
-        action_type = action.get("action", "unknown")
-
-        if action_type == "already_open":
-            log("[OS] Chrome already on main window, no profile selection needed.")
-            return True
-
-        if action_type == "click":
-            vx = int(action.get("x", 0))
-            vy = int(action.get("y", 0))
-            if vx > 0 and vy > 0:
-                click(vx, vy)
-                log(f"[OS] Clicked profile at ({vx}, {vy})")
-                time.sleep(2.0)
-                return True
-
-        log(f"[OS] Profile selection attempt {attempt+1}: got action={action_type}, retrying...")
-        time.sleep(1.5)
-
-    log("[OS] WARNING: Could not select profile via VLM. Continuing anyway.")
-    return False
-
-
-# ── Navigation ─────────────────────────────────────────────────────────────
-def navigate(url: str, wait_sec: float = 2.5) -> None:
-    log(f"[OS] Navigating to: {url}")
-    bring_chrome_to_front()
-    time.sleep(0.4)
-
-    # Click directly on the address bar (always at top of Chrome window)
-    # Address bar is roughly at y=70 on a standard Chrome window, centered
-    sw, sh = get_screen_size()
-    bar_x = sw // 2
-    bar_y = 55
-    pyautogui.click(bar_x, bar_y)
-    time.sleep(0.3)
-
-    # Select all existing text and replace with new URL
-    pyautogui.hotkey("command", "a")
-    time.sleep(0.1)
-    pyautogui.typewrite(url, interval=0.04)
-    time.sleep(0.2)
-    pyautogui.press("enter")
-    time.sleep(wait_sec)
-    log(f"[OS] Navigation complete.")
-
-
-# ── Mouse actions ───────────────────────────────────────────────────────────
-def click(vx: int, vy: int, button: str = "left") -> None:
-    bring_chrome_to_front()
-    time.sleep(0.15)
-    x, y = _scale_coords(vx, vy)
-    pyautogui.moveTo(x, y, duration=0.25)
-    time.sleep(0.08)
-    pyautogui.click(x, y, button=button)
-    log(f"[OS] Clicked ({vx},{vy}) → screen ({x},{y})")
-
-
-def double_click(vx: int, vy: int) -> None:
-    x, y = _scale_coords(vx, vy)
-    pyautogui.moveTo(x, y, duration=0.2)
-    time.sleep(0.05)
-    pyautogui.doubleClick(x, y)
-
-
-def scroll(direction: str = "down", amount: int = 3) -> None:
-    """Scroll the current page."""
-    delta = -amount if direction == "down" else amount
-    pyautogui.scroll(delta)
-    time.sleep(0.4)
-
-
-# ── Keyboard actions ────────────────────────────────────────────────────────
-def type_text(text: str, interval: float = 0.055) -> None:
-    bring_chrome_to_front()
-    time.sleep(0.3)
-    try:
-        import pyperclip
-        pyperclip.copy(text)
-        time.sleep(0.1)
-        pyautogui.hotkey("command", "v")
-        time.sleep(0.3)
-    except ImportError:
-        pyautogui.typewrite(text, interval=interval)
-
-
-def press_enter() -> None:
-    pyautogui.press("enter")
-    time.sleep(0.5)
-
-
-def press_escape() -> None:
-    pyautogui.press("escape")
-    time.sleep(0.3)
-
-
-def press_tab() -> None:
-    pyautogui.press("tab")
-    time.sleep(0.2)
-
-
-# ── Full startup sequence ───────────────────────────────────────────────────
-def open_chrome_with_profile(
-    target_email: str,
-    vlm_decide_fn,
-    start_url: str = "https://www.google.com",
-) -> bool:
-    """
-    Complete sequence:
-      1. Launch / bring Chrome to front
-      2. Select the right profile (VLM-guided)
-      3. Navigate to start_url
-    
-    Returns True on success.
-    """
-    log(f"[OS] Starting Chrome setup for profile: {target_email}")
-
-    launch_chrome()
-
-    # Give Chrome time to show profile picker (if first launch)
-    time.sleep(1.5)
-
-    # Try to select the right profile
-    select_profile_vlm(target_email, vlm_decide_fn)
-
-    # Navigate to starting URL
-    navigate(start_url)
-
-    log("[OS] Chrome ready.")
-    return True
-
-
-if __name__ == "__main__":
-    # Quick smoke test — just launches Chrome
-    launch_chrome()
-    print("[os_browser] Chrome launched. Check your screen.")
-
-```
-
-### jobhunter/os_snap.py
-
-```python
-# jobhunter/os_snap.py
-# ─────────────────────────────────────────────────────────────────────────────
-# macOS screen capture → base64 JPEG
-# Uses native screencapture — no Playwright, no OpenCV dependency for screen.
-# Drop-in replacement for jobhunter/snap.py but captures the REAL screen.
-# ─────────────────────────────────────────────────────────────────────────────
-
-import base64
-import subprocess
-import tempfile
-import os
-from PIL import Image
-import io
-
-# Resolution to send to VLM — big enough to read text, small enough to be fast
-SNAP_WIDTH  = 640
-SNAP_HEIGHT = 400
-JPEG_QUALITY = 60
-
-
-def snap_screen_b64() -> str:
-    """
-    Capture the full macOS screen → base64 JPEG string.
-    Uses `screencapture -x` (silent, no shutter sound).
-    """
-    with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as tmp:
-        tmp_path = tmp.name
-
-    try:
-        # -x = no sound, -1 = main display only
-        subprocess.run(
-            ["screencapture", "-x", tmp_path],
-            check=True,
-            capture_output=True,
-        )
-        img = Image.open(tmp_path).convert("RGB")
-        img = img.transpose(Image.FLIP_LEFT_RIGHT)  # ← add this
-        # Resize to VLM-friendly resolution (keeps aspect ratio, pads if needed)
-        img.thumbnail((SNAP_WIDTH, SNAP_HEIGHT), Image.LANCZOS)
-
-        buf = io.BytesIO()
-        img.save(buf, format="JPEG", quality=JPEG_QUALITY)
-        return base64.b64encode(buf.getvalue()).decode()
-
-    finally:
-        try:
-            os.unlink(tmp_path)
-        except Exception:
-            pass
-
-
-def snap_screen_pil() -> Image.Image:
-    """Return a PIL Image of the current screen (useful for coordinate mapping)."""
-    with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as tmp:
-        tmp_path = tmp.name
-    try:
-        subprocess.run(["screencapture", "-x", "-1", tmp_path], check=True, capture_output=True)
-        return Image.open(tmp_path).convert("RGB")
-    finally:
-        try:
-            os.unlink(tmp_path)
-        except Exception:
-            pass
-
-
-def get_screen_size() -> tuple[int, int]:
-    """Return actual screen resolution (width, height)."""
-    try:
-        import pyautogui
-        return pyautogui.size()
-    except Exception:
-        return (2560, 1600)  # safe fallback for Retina MacBook
-
-
-if __name__ == "__main__":
-    b64 = snap_screen_b64()
-    print(f"[os_snap] Screenshot captured: {len(b64)} base64 chars")
-
-```
-
-### jobhunter/profile.py
-
-```python
-# jobhunter/profile.py
-# ─────────────────────────────────────────────────────────────────────────────
-# EDIT THIS FILE with your real details before running the job hunter.
-# The VLM uses this profile to score and filter jobs intelligently.
-# ─────────────────────────────────────────────────────────────────────────────
-
-PROFILE = {
-    # ── Who you are ───────────────────────────────────────────────────────────
-    "name": "Swapnil",
-    "job_titles": [
-        "Junior Software Developer",
-        "Junior Python Developer",
-        "Junior Backend Developer",
-        "Junior Full Stack Developer",
-    ],
-
-    # ── Skills (VLM will check job descriptions for these) ───────────────────
-    "skills": [
-        "Python",
-        "JavaScript",
-        "React",
-        "Node.js",
-        "REST APIs",
-        "SQL",
-        "Git",
-        "Docker",  # remove if you don't know this
-    ],
-
-    # ── Experience ────────────────────────────────────────────────────────────
-    "years_experience": 1,   # 0–2 for junior
-    "education": "Bachelor's in Computer Science",  # or your actual degree
-
-    # ── Location preferences ──────────────────────────────────────────────────
-    "location": "India",           # your country/city
-    "remote_preference": "remote", # "remote", "hybrid", "onsite", or "any"
-    "open_to_relocation": False,
-
-    # ── Salary filter ─────────────────────────────────────────────────────────
-    # Set to None to disable salary filtering
-    "min_salary_lpa": None,        # e.g. 4 means ₹4 LPA minimum (for India)
-    "currency": "INR",             # "INR", "USD", "EUR" etc.
-
-    # ── Keywords to AVOID ─────────────────────────────────────────────────────
-    # Jobs containing any of these will be skipped
-    "avoid_keywords": [
-        "senior",
-        "lead",
-        "10+ years",
-        "5+ years",
-        "unpaid",
-        "internship",   # remove this if you want internships
-        "blockchain",
-        "web3",
-    ],
-
-    # ── Keywords you WANT ─────────────────────────────────────────────────────
-    # Jobs with these get a score boost
-    "prefer_keywords": [
-        "python",
-        "backend",
-        "api",
-        "startup",
-        "product",
-    ],
-}
-
-# ── Search queries per site ────────────────────────────────────────────────────
-# These are what get typed into each job site's search box
-SEARCH_QUERIES = {
-    "linkedin": [
-        "junior python developer remote",
-        "junior backend developer india",
-        "junior software developer remote india",
-    ],
-    "indeed": [
-        "junior python developer",
-        "junior software developer remote",
-        "entry level backend developer",
-    ],
-    "naukri": [
-        "junior python developer",
-        "junior software developer",
-        "entry level developer",
-    ],
-    "wellfound": [
-        "junior engineer python",
-        "software engineer junior remote",
-    ],
-}
-
-# ── Site credentials (needed for LinkedIn login) ──────────────────────────────
-CREDENTIALS = {
-    "linkedin": {
-        "email": "your_email@gmail.com",     # ← EDIT THIS
-        "password": "your_password_here",     # ← EDIT THIS
-    },
-    # Indeed, Naukri, Wellfound work without login for basic search
-}
-
-```
-
-### jobhunter/scheduler.py
-
-```python
-# jobhunter/scheduler.py
-# ─────────────────────────────────────────────────────────────────────────────
-# Keeps the job hunt running all day.
-# Runs immediately on start, then every RUN_EVERY_HOURS hours.
-# ─────────────────────────────────────────────────────────────────────────────
-
-import time
-import schedule
-from datetime import datetime
-
-from jobhunter.config import RUN_EVERY_HOURS
-from jobhunter.logger import log
-
-
-def _run_hunt():
-    """Single hunt cycle — called by scheduler."""
-    from jobhunter.profile import PROFILE, SEARCH_QUERIES
-    from jobhunter.lg_agent import run_full_hunt
-
-    log(f"\n{'='*50}")
-    log(f"HUNT CYCLE STARTING — {datetime.now().strftime('%A %d %b %Y, %H:%M')}")
-    log(f"{'='*50}")
-
-    try:
-        result = run_full_hunt(PROFILE, SEARCH_QUERIES)
-        log(f"Cycle complete. {result['new_this_run']} new jobs saved.")
-    except Exception as e:
-        log(f"[ERROR] Hunt cycle crashed: {e}")
-        import traceback
-        log(traceback.format_exc())
-
-
-def start_scheduler():
-    """
-    Run immediately, then repeat every RUN_EVERY_HOURS hours.
-    Blocks forever — call from main_jobhunter.py.
-    """
-    log(f"Job hunter scheduler starting.")
-    log(f"Will run every {RUN_EVERY_HOURS} hour(s). Press Ctrl+C to stop.\n")
-
-    # Run once immediately
-    _run_hunt()
-
-    # Then schedule repeating runs
-    schedule.every(RUN_EVERY_HOURS).hours.do(_run_hunt)
-
-    while True:
-        schedule.run_pending()
-        time.sleep(60)  # check every minute
-
-```
-
-### jobhunter/snap.py
-
-```python
-# jobhunter/snap.py
-# ─────────────────────────────────────────────────────────────────────────────
-# Captures the current browser page as a base64 JPEG.
-# Mirrors vision/inference/snap.py — same interface, different source.
-# Instead of webcam → we capture the Playwright browser page.
-# ─────────────────────────────────────────────────────────────────────────────
-
-import base64
-from jobhunter.config import JPEG_QUALITY
-
-
-def snap_browser_b64() -> str:
-    """
-    Screenshot the current browser page → base64 JPEG string.
-    Drop-in replacement for vision/inference/snap.py snap_b64().
-    """
-    from jobhunter.browser import get_browser
-
-    page = get_browser()
-
-    # Full PNG screenshot from Playwright
-    png_bytes = page.screenshot(full_page=False)  # viewport only — faster
-
-    # Convert PNG → JPEG for smaller payload (same as camera pipeline)
-    from PIL import Image
-    import io
-
-    img = Image.open(io.BytesIO(png_bytes)).convert("RGB")
-    buf = io.BytesIO()
-    img.save(buf, format="JPEG", quality=JPEG_QUALITY)
-    return base64.b64encode(buf.getvalue()).decode()
-
-```
-
-### jobhunter/storage.py
-
-```python
-# jobhunter/storage.py
-# ─────────────────────────────────────────────────────────────────────────────
-# SQLite for deduplication + CSV for your readable output.
-# Every job gets a unique ID (hash of title+company+site).
-# If the same job is found again, it's silently skipped.
-# ─────────────────────────────────────────────────────────────────────────────
-
-import csv
-import hashlib
-import sqlite3
-from datetime import datetime
-from pathlib import Path
-
-from jobhunter.config import DB_PATH, CSV_PATH
-
-
-# ── Schema ─────────────────────────────────────────────────────────────────
-_CREATE_TABLE = """
-CREATE TABLE IF NOT EXISTS jobs (
-    id          TEXT PRIMARY KEY,
-    title       TEXT,
-    company     TEXT,
-    location    TEXT,
-    salary      TEXT,
-    posted      TEXT,
-    url         TEXT,
-    snippet     TEXT,
-    site        TEXT,
-    score       INTEGER,
-    score_reason TEXT,
-    found_at    TEXT
-);
-"""
-
-_CSV_HEADERS = [
-    "found_at", "site", "score", "title", "company",
-    "location", "salary", "posted", "url", "snippet", "score_reason"
-]
-
-
-def _get_conn() -> sqlite3.Connection:
-    conn = sqlite3.connect(str(DB_PATH))
-    conn.execute(_CREATE_TABLE)
-    conn.commit()
-    return conn
-
-
-def _job_id(title: str, company: str, site: str) -> str:
-    """Stable hash — same job from same site always gets same ID."""
-    raw = f"{title.lower().strip()}|{company.lower().strip()}|{site.lower()}"
-    return hashlib.md5(raw.encode()).hexdigest()
-
-
-def is_seen(title: str, company: str, site: str) -> bool:
-    """Return True if this job is already in the database."""
-    job_id = _job_id(title, company, site)
-    conn = _get_conn()
-    row = conn.execute("SELECT 1 FROM jobs WHERE id=?", (job_id,)).fetchone()
-    conn.close()
-    return row is not None
-
-
-def save_job(job: dict, site: str, score: int, score_reason: str) -> bool:
-    """
-    Save a job to SQLite + append to CSV.
-    Returns True if saved (new), False if duplicate (skipped).
-    """
-    title   = job.get("title", "Unknown")
-    company = job.get("company", "Unknown")
-
-    if is_seen(title, company, site):
-        return False  # already have this one
-
-    job_id   = _job_id(title, company, site)
-    found_at = datetime.now().strftime("%Y-%m-%d %H:%M")
-
-    row = {
-        "id":           job_id,
-        "title":        title,
-        "company":      company,
-        "location":     job.get("location", ""),
-        "salary":       job.get("salary", ""),
-        "posted":       job.get("posted", ""),
-        "url":          job.get("url", ""),
-        "snippet":      job.get("snippet", ""),
-        "site":         site,
-        "score":        score,
-        "score_reason": score_reason,
-        "found_at":     found_at,
-    }
-
-    # ── Write to SQLite ──────────────────────────────────────────────────
-    conn = _get_conn()
-    conn.execute(
-        """INSERT OR IGNORE INTO jobs
-           (id,title,company,location,salary,posted,url,snippet,site,score,score_reason,found_at)
-           VALUES (:id,:title,:company,:location,:salary,:posted,:url,:snippet,:site,:score,:score_reason,:found_at)""",
-        row,
-    )
-    conn.commit()
-    conn.close()
-
-    # ── Append to CSV ────────────────────────────────────────────────────
-    csv_exists = CSV_PATH.exists()
-    with open(CSV_PATH, "a", newline="", encoding="utf-8") as f:
-        writer = csv.DictWriter(f, fieldnames=_CSV_HEADERS)
-        if not csv_exists:
-            writer.writeheader()
-        writer.writerow({k: row.get(k, "") for k in _CSV_HEADERS})
-
-    return True
-
-
-def get_stats() -> dict:
-    """Return summary stats for logging."""
-    conn = _get_conn()
-    total = conn.execute("SELECT COUNT(*) FROM jobs").fetchone()[0]
-    today = conn.execute(
-        "SELECT COUNT(*) FROM jobs WHERE found_at >= date('now')"
-    ).fetchone()[0]
-    top = conn.execute(
-        "SELECT title, company, score FROM jobs ORDER BY score DESC LIMIT 3"
-    ).fetchall()
-    conn.close()
-    return {"total": total, "today": today, "top_3": top}
-
-```
-
-### jobhunter/vlm_query.py
-
-```python
-# jobhunter/vlm_query.py
-# ─────────────────────────────────────────────────────────────────────────────
-# Sends browser screenshots to your VLM server and gets back structured actions.
-# Mirrors vision/inference/query.py — same HTTP call to your llama-server.
-# ─────────────────────────────────────────────────────────────────────────────
-
-import json
-import re
-import requests
-
-from jobhunter.snap import snap_browser_b64
-from jobhunter.config import VLM_SERVER_PORT, VLM_MAX_TOKENS, VLM_TEMPERATURE
-
-
-# ── System prompt for navigation decisions ─────────────────────────────────
-_NAV_SYSTEM = """You are a browser automation agent controlling a web browser to find job listings.
-You see a screenshot of the current browser page.
-Your job is to take ONE action to make progress toward the goal.
-
-You MUST respond with ONLY a JSON object — no explanation, no markdown, no extra text.
-
-JSON format:
-{
-  "action": "click" | "type" | "scroll" | "wait" | "extract" | "done" | "navigate",
-  "x": <pixel x, only for click>,
-  "y": <pixel y, only for click>,
-  "text": "<text to type, only for type action>",
-  "url": "<url, only for navigate action>",
-  "direction": "down" | "up",
-  "reason": "<one short sentence why>"
-}
-
-Rules:
-- click: click at pixel coordinates (x, y)
-- type: type text (assumes an input is already focused)
-- scroll: scroll the page
-- wait: wait for page to load (use after clicks that trigger navigation)
-- extract: the page now shows job listings you can read — extract them now
-- navigate: go directly to a URL
-- done: no more jobs to find on this page
-"""
-
-# ── System prompt for job data extraction ──────────────────────────────────
-_EXTRACT_SYSTEM = """You are a job listing extractor. You see a screenshot of a job search results page.
-Extract ALL visible job listings into a JSON array.
-
-Respond with ONLY a JSON array — no markdown, no explanation.
-
-Each item format:
-{
-  "title": "<job title>",
-  "company": "<company name>",
-  "location": "<location or Remote>",
-  "salary": "<salary if shown, else null>",
-  "posted": "<time posted if shown, else null>",
-  "url": "<job URL if visible in browser address or links, else null>",
-  "snippet": "<brief description if visible, else null>"
-}
-
-If you cannot see any job listings, return an empty array: []
-"""
-
-# ── System prompt for VLM job scoring ──────────────────────────────────────
-_SCORE_SYSTEM = """You are a job relevance scorer for a junior software developer.
-Given a job listing and a candidate profile, score the job from 1-10.
-
-Respond with ONLY a JSON object:
-{
-  "score": <1-10>,
-  "reason": "<one sentence why>",
-  "good_match": true | false
-}
-
-Score guide:
-10 = perfect match (title, skills, level all match)
-7-9 = strong match (most criteria match)
-5-6 = partial match (some skills missing but worth applying)
-1-4 = poor match (wrong level, wrong skills, or flagged keywords)
-"""
-
-
-def _call_vlm(screenshot_b64: str, system_prompt: str, user_prompt: str) -> str:
-    """
-    Single HTTP call to your llama-server.
-    Mirrors _query_server() in vision/inference/query.py — same endpoint.
-    """
-    try:
-        response = requests.post(
-            f"http://localhost:{VLM_SERVER_PORT}/v1/chat/completions",
-            json={
-                "messages": [
-                    {"role": "system", "content": system_prompt},
-                    {
-                        "role": "user",
-                        "content": [
-                            {
-                                "type": "image_url",
-                                "image_url": {
-                                    "url": f"data:image/jpeg;base64,{screenshot_b64}"
-                                },
-                            },
-                            {"type": "text", "text": user_prompt},
-                        ],
-                    },
-                ],
-                "max_tokens": VLM_MAX_TOKENS,
-                "temperature": VLM_TEMPERATURE,
-                "stream": False,
-            },
-            timeout=30,
-        )
-        return response.json()["choices"][0]["message"]["content"].strip()
-    except Exception as e:
-        print(f"[VLM] Call failed: {e}")
-        return "{}"
-
-
-def _parse_json(raw: str) -> dict | list:
-    """Robustly extract JSON from VLM response — handles stray markdown."""
-    raw = raw.strip()
-    # Strip markdown code fences if present
-    raw = re.sub(r"^```(?:json)?\s*", "", raw)
-    raw = re.sub(r"\s*```$", "", raw)
-    try:
-        return json.loads(raw)
-    except Exception:
-        # Try to find JSON object/array inside the text
-        match = re.search(r"(\{.*\}|\[.*\])", raw, re.DOTALL)
-        if match:
-            try:
-                return json.loads(match.group(1))
-            except Exception:
-                pass
-    return {}
-
-
-def decide_action(goal: str) -> dict:
-    """
-    Take a screenshot of the current page and ask the VLM what to do next.
-    Returns a parsed action dict.
-    """
-    screenshot = snap_browser_b64()
-    prompt = f"Goal: {goal}\n\nWhat is the single next action to take? Respond in JSON only."
-    raw = _call_vlm(screenshot, _NAV_SYSTEM, prompt)
-    action = _parse_json(raw)
-    print(f"[VLM→Action] {action.get('action','?')} — {action.get('reason','')}")
-    return action if isinstance(action, dict) else {}
-
-
-def extract_jobs_from_page() -> list[dict]:
-    """
-    Take a screenshot and ask the VLM to extract all visible job listings.
-    Returns a list of job dicts.
-    """
-    screenshot = snap_browser_b64()
-    prompt = "Extract all visible job listings from this screenshot as a JSON array."
-    raw = _call_vlm(screenshot, _EXTRACT_SYSTEM, prompt)
-    result = _parse_json(raw)
-    jobs = result if isinstance(result, list) else []
-    print(f"[VLM→Extract] Found {len(jobs)} jobs on this page")
-    return jobs
-
-
-def score_job(job: dict, profile: dict) -> dict:
-    """
-    Ask VLM to score a single job against the candidate profile.
-    Returns {score, reason, good_match}.
-    """
-    screenshot = snap_browser_b64()
-    prompt = (
-        f"Job listing:\n{json.dumps(job, indent=2)}\n\n"
-        f"Candidate profile:\n"
-        f"- Titles looking for: {', '.join(profile.get('job_titles', []))}\n"
-        f"- Skills: {', '.join(profile.get('skills', []))}\n"
-        f"- Experience: {profile.get('years_experience', 1)} year(s)\n"
-        f"- Prefers: {profile.get('remote_preference', 'any')}\n"
-        f"- Avoid keywords: {', '.join(profile.get('avoid_keywords', []))}\n\n"
-        f"Score this job 1–10. Respond in JSON only."
-    )
-    raw = _call_vlm(screenshot, _SCORE_SYSTEM, prompt)
-    result = _parse_json(raw)
-    return result if isinstance(result, dict) else {"score": 5, "reason": "unknown", "good_match": True}
 
 ```
 
@@ -3457,11 +1837,31 @@ if __name__ == "__main__":
 
 ```
 
-### main_jobhunter.py
+### main_agent.py
 
 ```python
 #!/usr/bin/env python3
-# main_jobhunter.py
+# main_agent.py
+# ─────────────────────────────────────────────────────────────────────────────
+# Entry point for the general-purpose screen agent.
+# Uses OmniParser for perception + your local Qwen3-VL for reasoning.
+#
+# Usage:
+#   python main_agent.py "Message Harshith i'll be late"
+#   python main_agent.py --app Messages "Message Harshith i'll be late"
+#   python main_agent.py --interactive
+#
+# Requirements:
+#   1. VLM server must be running (starts automatically if not):
+#        llama-server -m <model.gguf> --mmproj <mmproj.gguf> -ngl 99 --port 8081
+#      OR just run:  python main.py  (with MODE="vision_text" in config/features.py)
+#
+#   2. OmniParser weights downloaded:
+#        git clone https://github.com/microsoft/OmniParser
+#        cd OmniParser && python weights/download_weights.py
+#        pip install -e .
+#      Then update OMNIPARSER_WEIGHTS_DIR in config/agent.py
+# ─────────────────────────────────────────────────────────────────────────────
 
 import sys
 import time
@@ -3471,70 +1871,61 @@ _vlm_proc = None
 
 
 def main():
-    parser = argparse.ArgumentParser(description="AI Job Hunter")
-    parser.add_argument("--once",  action="store_true", help="Run one hunt cycle then exit")
-    parser.add_argument("--site",  type=str, default=None, help="Hunt one specific site only")
-    parser.add_argument("--stats", action="store_true", help="Show DB stats and exit")
+    parser = argparse.ArgumentParser(description="Screen Agent — OmniParser + Qwen3-VL")
+    parser.add_argument("goal", nargs="*", help="Task to perform (quoted string)")
+    parser.add_argument(
+        "--app",
+        type=str,
+        default=None,
+        help="macOS app to bring to front first (e.g. 'Messages')",
+    )
+    parser.add_argument(
+        "--interactive",
+        action="store_true",
+        help="Run in interactive mode — prompts for tasks in a loop",
+    )
+    parser.add_argument(
+        "--no-vlm-start",
+        action="store_true",
+        help="Don't auto-start the VLM server (assume it's already running)",
+    )
     args = parser.parse_args()
 
-    # ── Stats mode ─────────────────────────────────────────────────────────
-    if args.stats:
-        from jobhunter.storage import get_stats
-        from jobhunter.config import CSV_PATH, DB_PATH
-        stats = get_stats()
-        print(f"\n{'='*40}")
-        print(f"  Job Hunter Stats")
-        print(f"{'='*40}")
-        print(f"  Total jobs in DB : {stats['total']}")
-        print(f"  Found today      : {stats['today']}")
-        print(f"  CSV file         : {CSV_PATH}")
-        print(f"  DB file          : {DB_PATH}")
-        if stats["top_3"]:
-            print(f"\n  Top matches:")
-            for title, company, score in stats["top_3"]:
-                print(f"    ★{score}  {title} @ {company}")
-        print(f"{'='*40}\n")
+    # ── Start VLM server if needed ─────────────────────────────────────────
+    if not args.no_vlm_start:
+        _start_vlm_server()
+
+    # ── Initialise agent ───────────────────────────────────────────────────
+    from agent.loop import ScreenAgent
+
+    agent = ScreenAgent()
+
+    # ── Interactive mode ───────────────────────────────────────────────────
+    if args.interactive:
+        print("\n  Screen Agent — Interactive Mode")
+        print("  Type a task and press Enter. Empty line to quit.\n")
+        while True:
+            try:
+                goal = input("  Task: ").strip()
+            except (EOFError, KeyboardInterrupt):
+                print("\n  Bye.")
+                break
+            if not goal:
+                break
+            agent.run(goal, focus_app=args.app)
+            print()
         return
 
-    # ── Start VLM server ────────────────────────────────────────────────────
-    _start_vlm_server()
+    # ── Single task mode ──────────────────────────────────────────────────
+    if not args.goal:
+        parser.print_help()
+        sys.exit(1)
 
-    # ── Load profile ────────────────────────────────────────────────────────
-    from jobhunter.profile import PROFILE, SEARCH_QUERIES
-    from jobhunter.logger import log
-
-    log(f"Profile loaded: {PROFILE['name']}")
-    log(f"Looking for: {', '.join(PROFILE['job_titles'][:2])}...")
-
-    try:
-        if args.site:
-            site = args.site.lower()
-            queries = SEARCH_QUERIES.get(site)
-            if not queries:
-                print(f"Unknown site '{site}'. Available: {list(SEARCH_QUERIES.keys())}")
-                sys.exit(1)
-            from jobhunter.lg_agent import hunt_site
-            total = 0
-            for q in queries:
-                total += hunt_site(site, q, PROFILE)
-            log(f"Done. {total} new jobs saved from {site}.")
-
-        elif args.once:
-            from jobhunter.lg_agent import run_full_hunt
-            result = run_full_hunt(PROFILE, SEARCH_QUERIES)
-            print(f"\nDone. {result['new_this_run']} new jobs saved.")
-
-        else:
-            from jobhunter.scheduler import start_scheduler
-            try:
-                start_scheduler()
-            except KeyboardInterrupt:
-                print("\n\nStopped by user.")
-
-    finally:
-        _stop_vlm_server()
+    goal = " ".join(args.goal)
+    agent.run(goal, focus_app=args.app)
 
 
+# ── VLM server auto-start (mirrors main_jobhunter.py exactly) ─────────────
 def _start_vlm_server():
     global _vlm_proc
     import requests
@@ -3552,8 +1943,19 @@ def _start_vlm_server():
 
     print(f"[VLM] Starting llama-server on port {VLM_SERVER_PORT}...")
     _vlm_proc = subprocess.Popen(
-        [VLM_SERVER_BINARY, "-m", VLM_MODEL_PATH, "--mmproj", VLM_MMPROJ_PATH,
-         "-ngl", "99", "-c", "4096", "--port", str(VLM_SERVER_PORT)],
+        [
+            VLM_SERVER_BINARY,
+            "-m",
+            VLM_MODEL_PATH,
+            "--mmproj",
+            VLM_MMPROJ_PATH,
+            "-ngl",
+            "99",
+            "-c",
+            "4096",
+            "--port",
+            str(VLM_SERVER_PORT),
+        ],
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
     )
@@ -3571,13 +1973,14 @@ def _start_vlm_server():
     raise RuntimeError("[VLM] Server did not start within 120s.")
 
 
-def _stop_vlm_server():
+import atexit
+
+
+@atexit.register
+def _cleanup():
     global _vlm_proc
     if _vlm_proc:
-        print("[VLM] Stopping llama-server...")
         _vlm_proc.terminate()
-        _vlm_proc = None
-        print("[VLM] Server stopped.")
 
 
 if __name__ == "__main__":
@@ -3658,14 +2061,40 @@ def _run_stt_only():
     def on_speech_start():
         show_speaking()
 
+    _awake = [False]  # use list so inner function can modify it
+
+ 
     def on_speech_end():
         t_start = time.time()
         text = end_of_speech(transcriber)
         whisper_latency = time.time() - t_start
-        if text:
-            show_stt_final(text)
-            log_request(logger, text, "", whisper_latency, 0.0, 0.0, whisper_latency)
+        if not text:
+            reset_vad_state(vad_state)
+            return
+
+        from config.vad import WAKE_WORD, WAKE_WORD_ENABLED, SLEEP_WORD
+
+        # Sleep word — go back to waiting for wake word
+        if _awake[0] and SLEEP_WORD.lower() in text.lower():
+            _awake[0] = False
+            show_stt_final(f"[Sleeping — say '{WAKE_WORD}' to wake me]")
+            reset_vad_state(vad_state)
+            return
+
+        # Wake word
+        if WAKE_WORD_ENABLED and not _awake[0]:
+            if WAKE_WORD.lower() in text.lower():
+                _awake[0] = True
+                show_stt_final(f"[Awake — listening]")
+            reset_vad_state(vad_state)
+            return
+
+        show_stt_final(text)
+        log_request(logger, text, "", whisper_latency, 0.0, 0.0, whisper_latency)
+        _awake[0] = False  # go back to sleep after each sentence
+        show_stt_final(f"[Sleeping — say '{WAKE_WORD}' to wake me]")
         reset_vad_state(vad_state)
+
 
     run_mic_session(
         transcriber=transcriber,
@@ -3899,6 +2328,16 @@ def _run_full():
                 whisper_latency = time.time() - whisper_start
                 if not text:
                     return
+
+                from config.vad import WAKE_WORD, WAKE_WORD_ENABLED
+                if WAKE_WORD_ENABLED:
+                    if not hasattr(_run, "_awake"):
+                        _run._awake = False
+                    if not _run._awake:
+                        if WAKE_WORD.lower() in text.lower():
+                            _run._awake = True
+                            show_you(f"[Wake word detected: {text}]")
+                        return 
                 show_you(text)
                 resume(engine)
                 speak_filler(engine)
@@ -4056,6 +2495,16 @@ def _run_vision_speech():
                 whisper_latency = time.time() - whisper_start
                 if not text:
                     return
+
+                from config.vad import WAKE_WORD, WAKE_WORD_ENABLED
+                if WAKE_WORD_ENABLED:
+                    if not hasattr(_run, "_awake"):
+                        _run._awake = False
+                    if not _run._awake:
+                        if WAKE_WORD.lower() in text.lower():
+                            _run._awake = True
+                            show_you(f"[Wake word detected: {text}]")
+                        return  # ignore everything until wake word heard
                 show_you(text)
                 resume(engine)
                 speak_filler(engine)
@@ -4183,6 +2632,16 @@ def _run_voice_screen():
                 whisper_latency = time.time() - e2e_start
                 if not text:
                     return
+
+                from config.vad import WAKE_WORD, WAKE_WORD_ENABLED
+                if WAKE_WORD_ENABLED:
+                    if not hasattr(_run, "_awake"):
+                        _run._awake = False
+                    if not _run._awake:
+                        if WAKE_WORD.lower() in text.lower():
+                            _run._awake = True
+                            show_you(f"[Wake word detected: {text}]")
+                        return  # ignore everything until wake word heard
                 show_you(text)
                 resume(engine)
                 speak_filler(engine)
@@ -4268,11 +2727,6 @@ langchain-openai
 pytesseract
 
 ```
-
-### sentence_04.wav
-
-(Skipped: binary or unreadable file)
-
 
 ### server/__init__.py
 
@@ -4926,165 +3380,6 @@ def teardown_session(session: dict) -> None:
         shutdown(tts)
     log_event(session["logger"], "Client disconnected")
     close_logger(session["logger"])
-
-```
-
-### test_audio_000.wav
-
-(Skipped: binary or unreadable file)
-
-
-### test_os_browser.py
-
-```python
-#!/usr/bin/env python3
-# test_os_browser.py
-# ─────────────────────────────────────────────────────────────────────────────
-# Smoke test for the OS-level browser automation.
-# Run this FIRST before plugging into the full job hunter.
-#
-# What it does:
-#   1. Takes a screenshot — verifies screencapture works
-#   2. Launches Chrome
-#   3. Uses VLM to find and click the swapnilhgf@gmail.com profile
-#   4. Navigates to google.com
-#   5. Searches for "python developer jobs"
-#
-# Usage:
-#   python test_os_browser.py
-#
-# Requirements:
-#   pip install pyautogui pyperclip Pillow
-#   VLM server must be running on port 8081 (start your normal app first)
-# ─────────────────────────────────────────────────────────────────────────────
-
-import sys
-import time
-
-TARGET_EMAIL = "swapnilhgf@gmail.com"
-START_URL    = "https://www.google.com"
-
-
-def main():
-    print("\n" + "="*55)
-    print("  OS Browser Automation — Smoke Test")
-    print("="*55 + "\n")
-
-    # ── Step 0: Verify VLM server is running ──────────────────────────────
-    _check_vlm()
-
-    # ── Step 1: Take a test screenshot ────────────────────────────────────
-    print("[1/5] Taking test screenshot...")
-    from jobhunter.os_snap import snap_screen_b64, get_screen_size
-    b64 = snap_screen_b64()
-    print(f"  ✓ Screenshot OK — {len(b64)} chars, screen size: {get_screen_size()}")
-
-    # ── Step 2: Launch Chrome ─────────────────────────────────────────────
-    print("\n[2/5] Launching Chrome...")
-    from jobhunter.os_browser import launch_chrome
-    launch_chrome()
-    print("  ✓ Chrome launch command sent.")
-
-    # Give Chrome 3 seconds to fully open
-    print("  Waiting 3s for Chrome to appear...")
-    time.sleep(3)
-
-    # ── Step 3: Select profile ────────────────────────────────────────────
-    print(f"\n[3/5] Selecting Chrome profile: {TARGET_EMAIL}")
-    print("  (VLM will look at your screen and click the right profile)")
-
-    from jobhunter.os_actions import decide_action, execute_action
-
-    profile_goal = (
-        f"I need to select the Chrome profile for '{TARGET_EMAIL}'. "
-        f"If you see a 'Who's using Chrome?' profile picker screen, "
-        f"click on the avatar/name matching '{TARGET_EMAIL}'. "
-        f"If Chrome is already showing a browser window (no profile picker), "
-        f"respond with action=already_open. "
-        f"Click the correct profile or say already_open."
-    )
-
-    for attempt in range(5):
-        print(f"  Attempt {attempt+1}/5: asking VLM what to do...")
-        action = decide_action(profile_goal)
-        action_type = action.get("action", "unknown")
-        print(f"  VLM says: {action_type} — {action.get('reason', '')}")
-
-        if action_type == "already_open":
-            print("  ✓ Chrome already on main window.")
-            break
-        elif action_type == "click":
-            execute_action(action)
-            time.sleep(2.5)
-            print("  ✓ Clicked profile.")
-            break
-        else:
-            print(f"  Unexpected action '{action_type}', waiting and retrying...")
-            time.sleep(2)
-
-    # ── Step 4: Navigate to Google ────────────────────────────────────────
-    print(f"\n[4/5] Navigating to {START_URL}...")
-    from jobhunter.os_browser import navigate
-    navigate(START_URL, wait_sec=3)
-    print(f"  ✓ Navigated to {START_URL}")
-
-    # ── Step 5: Type a search query ───────────────────────────────────────
-    print("\n[5/5] Testing search — typing into Google search box...")
-    print("  (VLM will find the search box and click it)")
-
-    search_goal = (
-        "I see Google's homepage. "
-        "Click on the search box (the main text input in the center of the page). "
-        "Respond with action=click and the x,y coordinates of the search input."
-    )
-
-    for attempt in range(3):
-        action = decide_action(search_goal)
-        if action.get("action") == "click":
-            execute_action(action)
-            time.sleep(0.5)
-            # Now type the search query
-            from jobhunter.os_browser import type_text, press_enter
-            type_text("python developer jobs remote")
-            time.sleep(0.3)
-            press_enter()
-            time.sleep(2)
-            print("  ✓ Search submitted!")
-            break
-        time.sleep(1.5)
-
-    # ── Done ──────────────────────────────────────────────────────────────
-    print("\n" + "="*55)
-    print("  ✓ All steps complete!")
-    print("  Check your screen — Chrome should show Google search results.")
-    print("="*55 + "\n")
-    print("If everything looks good, the OS automation is working.")
-    print("You can now run: python main_jobhunter.py --once\n")
-
-
-def _check_vlm():
-    import requests
-    from jobhunter.config import VLM_SERVER_PORT
-
-    url = f"http://localhost:{VLM_SERVER_PORT}/health"
-    print(f"[0/5] Checking VLM server on port {VLM_SERVER_PORT}...")
-    try:
-        r = requests.get(url, timeout=3)
-        if r.status_code == 200:
-            print(f"  ✓ VLM server running.\n")
-            return
-    except Exception:
-        pass
-
-    print(f"\n  ✗ VLM server NOT running on port {VLM_SERVER_PORT}.")
-    print("  Start it first:")
-    print(f"    llama-server -m <model.gguf> --mmproj <mmproj.gguf> -ngl 99 -c 2048 --port {VLM_SERVER_PORT}")
-    print("  Or set MODE='vision_text' in config/features.py and run main.py\n")
-    sys.exit(1)
-
-
-if __name__ == "__main__":
-    main()
 
 ```
 
