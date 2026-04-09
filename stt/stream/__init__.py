@@ -1,7 +1,7 @@
 # transcription/stream/__init__.py
-from transcription.stream.buffer import create_buffer
-from transcription.stream.worker import start_worker, stop_worker
-from transcription.stream.final import run_final_pass
+from stt.stream.buffer import create_buffer
+from stt.stream.worker import start_worker, stop_worker
+from stt.stream.final import run_final_pass
 
 
 def create_stream(on_partial, on_final, sample_rate: int = 16000) -> dict:
@@ -25,7 +25,7 @@ def stop_stream(state: dict) -> None:
 
 
 def feed(state: dict, chunk) -> None:
-    from transcription.stream.buffer import append
+    from stt.stream.buffer import append
 
     append(state["buf"], chunk)
 
@@ -39,7 +39,7 @@ def end_of_speech(state: dict) -> str:
 
 
 def clear_stream(state: dict) -> None:
-    from transcription.stream.buffer import clear_buffer
+    from stt.stream.buffer import clear_buffer
 
     clear_buffer(state["buf"])
     state["last_text"] = ""

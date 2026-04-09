@@ -1,8 +1,8 @@
 # transcription/vad/processor.py
 import numpy as np
 from config.vad import PAUSE_SECONDS, MIN_SPEECH_SEC
-from transcription.vad.state import reset_vad_state
-from transcription.vad.silero import is_speech as _is_speech
+from stt.vad.state import reset_vad_state
+from stt.vad.silero import is_speech as _is_speech
 
 
 def process_chunk(
@@ -35,7 +35,7 @@ def process_chunk(
 if __name__ == "__main__":
     import numpy as np
 
-    from transcription.vad.state import create_vad_state
+    from stt.vad.state import create_vad_state
 
     s = create_vad_state()
     for _ in range(20):

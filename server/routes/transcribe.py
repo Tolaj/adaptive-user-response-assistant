@@ -5,8 +5,8 @@ from config.whisper import WHISPER_SAMPLE_RATE
 from audio.io.read import read_wav
 from audio.transform.mono import to_mono
 from audio.transform.resample import resample
-from transcription.model.singleton import get_model
-from transcription.transcribe.batch import transcribe_audio
+from stt.model.singleton import get_model
+from stt.transcribe.batch import transcribe_audio
 
 
 def transcribe_handler():

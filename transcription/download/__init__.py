@@ -1,1 +1,0 @@
-from transcription.download.whisper import ensure_downloaded

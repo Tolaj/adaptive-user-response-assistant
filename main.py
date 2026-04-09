@@ -33,18 +33,18 @@ def _run_server():
 
     print(f"  Starting server on {SERVER_HOST}:{SERVER_PORT}")
     if ENABLE_STT:
-        from transcription.model.singleton import get_model
+        from stt.model.singleton import get_model
 
         get_model()
     create_app().run(host=SERVER_HOST, port=SERVER_PORT, debug=False, threaded=True)
 
 
 def _run_stt_only():
-    from transcription.model.singleton import get_model
-    from transcription.stream import create_stream, start_stream, end_of_speech
-    from transcription.vad.state import create_vad_state, reset_vad_state
+    from stt.model.singleton import get_model
+    from stt.stream import create_stream, start_stream, end_of_speech
+    from stt.vad.state import create_vad_state, reset_vad_state
     from config.vad import RECORD_SAMPLE_RATE
-    from transcription.vad.session import run_mic_session
+    from stt.vad.session import run_mic_session
     from ui.console import show_partial, show_speaking, show_stt_final
 
     print("  Loading Whisper...")
@@ -162,11 +162,11 @@ def _run_voice_chat():
     from llm.model.singleton import get_model
     from llm.inference.stream import stream_response
     from llm.history.state import create_history
-    from transcription.model.singleton import get_model as load_whisper
-    from transcription.stream import create_stream, start_stream, end_of_speech
-    from transcription.vad.state import create_vad_state, reset_vad_state
+    from stt.model.singleton import get_model as load_whisper
+    from stt.stream import create_stream, start_stream, end_of_speech
+    from stt.vad.state import create_vad_state, reset_vad_state
     from config.vad import RECORD_SAMPLE_RATE
-    from transcription.vad.session import run_mic_session
+    from stt.vad.session import run_mic_session
     from ui.console import show_partial, show_speaking, show_you, start_ai_line
     import threading
 
@@ -245,10 +245,10 @@ def _run_full():
     from llm.model.singleton import get_model
     from llm.inference.stream import stream_response
     from llm.history.state import create_history
-    from transcription.model.singleton import get_model as load_whisper
-    from transcription.stream import create_stream, start_stream, end_of_speech
-    from transcription.vad.state import create_vad_state, reset_vad_state
-    from transcription.vad.session import run_mic_session
+    from stt.model.singleton import get_model as load_whisper
+    from stt.stream import create_stream, start_stream, end_of_speech
+    from stt.vad.state import create_vad_state, reset_vad_state
+    from stt.vad.session import run_mic_session
     from tts.engine.state import create_engine
     from tts.engine.worker import start_worker
     from tts.engine.feed import feed_token, flush as tts_flush

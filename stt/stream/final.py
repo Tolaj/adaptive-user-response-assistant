@@ -3,14 +3,14 @@ import threading
 import numpy as np
 import whisper
 
-from transcription.model.singleton import get_model
-from transcription.transcribe.options import build_whisper_options
-from transcription.hallucination.repetition import has_repetition
-from transcription.hallucination.noise import clean_text
-from transcription.hallucination.confidence import passes_confidence
-from transcription.stream.buffer import get_audio, clear_buffer
+from stt.model.singleton import get_model
+from stt.transcribe.options import build_whisper_options
+from stt.hallucination.repetition import has_repetition
+from stt.hallucination.noise import clean_text
+from stt.hallucination.confidence import passes_confidence
+from stt.stream.buffer import get_audio, clear_buffer
 
-from transcription.model.lock import infer_lock as _infer_lock
+from stt.model.lock import infer_lock as _infer_lock
 
 
 def run_final_pass(buf: dict) -> str:
@@ -36,7 +36,7 @@ def _transcribe(audio: np.ndarray) -> str:
 
 if __name__ == "__main__":
     import numpy as np
-    from transcription.stream.buffer import create_buffer, append
+    from stt.stream.buffer import create_buffer, append
 
     buf = create_buffer()
     append(buf, np.zeros(16000, dtype=np.float32))

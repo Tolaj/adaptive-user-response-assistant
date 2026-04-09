@@ -3,18 +3,18 @@ import threading
 import numpy as np
 import whisper
 
-from transcription.model.singleton import get_model
-from transcription.transcribe.options import build_whisper_options
-from transcription.hallucination.repetition import has_repetition
-from transcription.hallucination.noise import clean_text
-from transcription.hallucination.confidence import passes_confidence
+from stt.model.singleton import get_model
+from stt.transcribe.options import build_whisper_options
+from stt.hallucination.repetition import has_repetition
+from stt.hallucination.noise import clean_text
+from stt.hallucination.confidence import passes_confidence
 from config.vad import MIN_AUDIO_SEC
 
-from transcription.model.lock import infer_lock as _infer_lock
+from stt.model.lock import infer_lock as _infer_lock
 
 
 def run_partial_pass(buf: dict) -> str:
-    from transcription.stream.buffer import get_audio
+    from stt.stream.buffer import get_audio
 
     audio = get_audio(buf)
     if audio is None or len(audio) / buf["sample_rate"] < MIN_AUDIO_SEC:

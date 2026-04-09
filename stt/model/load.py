@@ -5,7 +5,7 @@ import whisper.model as wm
 
 from config.paths import WHISPER_DIR
 from config.whisper import WHISPER_MODEL_NAME
-from transcription.model.device import resolve_device
+from stt.model.device import resolve_device
 
 
 def load_whisper(
@@ -13,7 +13,7 @@ def load_whisper(
     device: str | None = None,
 ) -> wm.Whisper:
     """Load Whisper from models/whisper/. Downloads if missing."""
-    from transcription.download.whisper import ensure_downloaded
+    from stt.download.whisper import ensure_downloaded
 
     if device is None:
         device = resolve_device()

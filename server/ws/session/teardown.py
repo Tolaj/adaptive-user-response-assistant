@@ -4,7 +4,7 @@ from server.logger import log_event, close_logger
 def teardown_session(session: dict) -> None:
     t = session.get("transcriber")
     if t:
-        from transcription.stream import stop_stream
+        from stt.stream import stop_stream
 
         stop_stream(t)
     tts = session.get("tts")

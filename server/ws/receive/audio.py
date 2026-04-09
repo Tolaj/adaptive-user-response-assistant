@@ -19,7 +19,7 @@ def handle_audio_frame(data: bytes, session: dict, trigger_eos_fn) -> None:
             session["in_speech"] = False
             return
     chunk = np.frombuffer(data, dtype=np.float32)
-    from transcription.stream import feed
+    from stt.stream import feed
 
     feed(session["transcriber"], chunk)
     amp = float(np.abs(chunk).mean())

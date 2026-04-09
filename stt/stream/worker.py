@@ -32,7 +32,7 @@ def _run_partial(state: dict) -> None:
         return
     state["is_transcribing"] = True
     try:
-        from transcription.stream.partial import run_partial_pass
+        from stt.stream.partial import run_partial_pass
 
         text = run_partial_pass(state["buf"])
         if text and text != state["last_text"]:

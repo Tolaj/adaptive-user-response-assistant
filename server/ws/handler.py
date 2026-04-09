@@ -1,5 +1,5 @@
 from config.features import ENABLE_STT
-from transcription.model.singleton import get_model as get_whisper
+from stt.model.singleton import get_model as get_whisper
 from llm.model.singleton import get_model as get_llm
 from server.ws.session.create import create_session
 from server.ws.session.teardown import teardown_session
@@ -19,7 +19,7 @@ def handle_ws(ws) -> None:
     get_llm()
 
     if ENABLE_STT:
-        from transcription.stream import create_stream, start_stream
+        from stt.stream import create_stream, start_stream
         from server.ws.send.stt import send_partial
 
         session["transcriber"] = create_stream(

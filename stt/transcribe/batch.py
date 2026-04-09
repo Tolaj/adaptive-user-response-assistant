@@ -5,10 +5,10 @@ import threading
 import numpy as np
 import whisper
 
-from transcription.model.singleton import get_model
+from stt.model.singleton import get_model
 from config.whisper import WHISPER_DEVICE
 
-from transcription.model.lock import infer_lock as _infer_lock
+from stt.model.lock import infer_lock as _infer_lock
 
 
 def transcribe_audio(audio: np.ndarray) -> str:

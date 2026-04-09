@@ -22,7 +22,7 @@ def trigger_eos(session: dict, ws) -> None:
             session["silence_accumulated"] = 0
             session["in_speech"] = False
             if session.get("transcriber"):
-                from transcription.stream import clear_stream
+                from stt.stream import clear_stream
 
                 clear_stream(session["transcriber"])
             return
@@ -41,7 +41,7 @@ def trigger_eos(session: dict, ws) -> None:
 
         text = ""
         if ENABLE_STT and session.get("transcriber"):
-            from transcription.stream import end_of_speech
+            from stt.stream import end_of_speech
 
             text = end_of_speech(session["transcriber"])
 

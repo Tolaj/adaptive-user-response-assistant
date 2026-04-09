@@ -5,8 +5,8 @@ from audio.io.mic import open_mic
 from audio.transform.resample import resample
 from config.vad import RECORD_SAMPLE_RATE, PREROLL_SECONDS
 from config.whisper import WHISPER_SAMPLE_RATE
-from transcription.stream import feed
-from transcription.vad.processor import process_chunk
+from stt.stream import feed
+from stt.vad.processor import process_chunk
 
 
 def run_mic_session(

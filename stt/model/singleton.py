@@ -14,7 +14,7 @@ def get_model() -> wm.Whisper:
     with _lock:
         if _model is not None:
             return _model
-        from transcription.model.load import load_whisper
+        from stt.model.load import load_whisper
 
         _model = load_whisper()
     return _model

@@ -2,7 +2,7 @@ from flask import jsonify
 from config.whisper import WHISPER_MODEL_NAME
 from config.features import ENABLE_STT, ENABLE_TTS
 from config.tts import TTS_MODE, TTS_SERVER_BACKEND
-from transcription.model.singleton import is_loaded as whisper_loaded
+from stt.model.singleton import is_loaded as whisper_loaded
 from llm.model.singleton import is_loaded as llm_loaded
 
 
