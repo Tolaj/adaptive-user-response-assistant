@@ -1,4 +1,4 @@
-from ui.console import (
+from utils.console import (
     show_partial,
     show_speaking,
     show_stt_final,

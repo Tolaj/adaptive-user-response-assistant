@@ -45,7 +45,7 @@ def _run_stt_only():
     from stt.vad.state import create_vad_state, reset_vad_state
     from config.vad import RECORD_SAMPLE_RATE
     from stt.vad.session import run_mic_session
-    from ui.console import show_partial, show_speaking, show_stt_final
+    from utils.console import show_partial, show_speaking, show_stt_final
 
     print("  Loading Whisper...")
     get_model()
@@ -91,7 +91,7 @@ def _run_tts_only():
     from tts.engine.feed import feed_token, flush
     from tts.engine.status import shutdown
     from tts.model.singleton import get_model as get_tts_model
-    from ui.console import prompt_you
+    from utils.console import prompt_you
 
     print("  Loading TTS model [Supertonic]...")
     engine = create_engine(
@@ -124,7 +124,7 @@ def _run_text_chat():
     from llm.model.singleton import get_model
     from llm.inference.stream import stream_response
     from llm.history.state import create_history
-    from ui.console import prompt_you
+    from utils.console import prompt_you
 
     print("  Loading LLM...")
     get_model()
@@ -167,7 +167,7 @@ def _run_voice_chat():
     from stt.vad.state import create_vad_state, reset_vad_state
     from config.vad import RECORD_SAMPLE_RATE
     from stt.vad.session import run_mic_session
-    from ui.console import show_partial, show_speaking, show_you, start_ai_line
+    from utils.console import show_partial, show_speaking, show_you, start_ai_line
     import threading
 
     print("  Loading Whisper + LLM...")
@@ -255,7 +255,7 @@ def _run_full():
     from tts.engine.control import interrupt, resume, speak_filler, record_llm_latency
     from tts.engine.status import is_speaking, shutdown
     from config.vad import RECORD_SAMPLE_RATE
-    from ui.console import show_partial, show_speaking, show_you, start_ai_line
+    from utils.console import show_partial, show_speaking, show_you, start_ai_line
     import threading
 
     print("  Loading all models...")
