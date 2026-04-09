@@ -31,5 +31,11 @@ def clear_buffer(buf: dict) -> None:
 def _cap(buf: dict) -> None:
     max_samples = int(MAX_BUFFER_SEC * buf["sample_rate"])
     total = sum(len(c) for c in buf["chunks"])
+    dropped = 0
     while total > max_samples and buf["chunks"]:
-        total -= len(buf["chunks"].pop(0))
+        chunk = buf["chunks"].pop(0)
+        total -= len(chunk)
+        dropped += len(chunk)
+    if dropped > 0:
+        secs = dropped / buf["sample_rate"]
+        print(f"[Buffer] Dropped {secs:.1f}s — utterance too long")

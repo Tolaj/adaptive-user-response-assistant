@@ -271,6 +271,14 @@ def _run_full():
     from tts.model.singleton import get_model as get_tts_model
 
     get_tts_model()
+    from stt.stream.buffer import create_buffer, append as buf_append
+    from stt.stream.final import run_final_pass
+    import numpy as np
+
+    _warmup_buf = create_buffer()
+    buf_append(_warmup_buf, np.zeros(16000, dtype=np.float32))
+    run_final_pass(_warmup_buf)  # primes the stream → whisper path
+
     print("  All ready.\n")
 
     logger = create_logger()

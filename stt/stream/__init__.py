@@ -10,6 +10,7 @@ def create_stream(on_partial, on_final, sample_rate: int = 16000) -> dict:
         "on_partial": on_partial,
         "on_final": on_final,
         "last_text": "",
+        "last_partial_samples": 0,  # add this
         "running": False,
         "worker_thread": None,
         "is_transcribing": False,

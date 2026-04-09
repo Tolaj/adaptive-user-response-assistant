@@ -30,7 +30,16 @@ def _loop(state: dict) -> None:
 def _run_partial(state: dict) -> None:
     if state["is_transcribing"]:
         return
+    from stt.stream.buffer import get_audio
+
+    audio = get_audio(state["buf"])
+    if audio is None:
+        return
+    new_samples = len(audio) - state["last_partial_samples"]
+    if new_samples < 8000:  # less than 0.5s of new audio — skip
+        return
     state["is_transcribing"] = True
+    state["last_partial_samples"] = len(audio)
     try:
         from stt.stream.partial import run_partial_pass
 

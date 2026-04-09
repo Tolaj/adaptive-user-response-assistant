@@ -6,7 +6,8 @@ from config.vad import SILERO_THRESHOLD
 
 _model = None
 _load_lock = threading.Lock()  # only for initial load
-_infer_lock = threading.Lock()  # only for inference
+_infer_lock = threading.Lock()
+_acc_lock = threading.Lock()  # add this line
 _sample_rate = 16000
 _MIN_SAMPLES = 512
 _accumulator = np.array([], dtype=np.float32)
@@ -35,11 +36,12 @@ def is_speech(chunk: np.ndarray, source_sr: int) -> bool:
         if source_sr != _sample_rate
         else chunk.astype(np.float32)
     )
-    _accumulator = np.concatenate([_accumulator, audio])
-    if len(_accumulator) < _MIN_SAMPLES:
-        return False
-    tensor = torch.from_numpy(_accumulator[:_MIN_SAMPLES]).float()
-    _accumulator = _accumulator[_MIN_SAMPLES:]
+    with _acc_lock:
+        _accumulator = np.concatenate([_accumulator, audio])
+        if len(_accumulator) < _MIN_SAMPLES:
+            return False
+        tensor = torch.from_numpy(_accumulator[:_MIN_SAMPLES]).float()
+        _accumulator = _accumulator[_MIN_SAMPLES:]
     model = _get_model()
     with _infer_lock:
         prob = model(tensor, _sample_rate).item()
